@@ -4,8 +4,8 @@
 A* Path Planner
 ===============
 Subscribes:
-  /map           (nav_msgs/OccupancyGrid)    — static map from map_publisher
-  /planner_goal  (geometry_msgs/PoseStamped) — mission goal from navigator
+    /map           (nav_msgs/OccupancyGrid)    — occupancy grid map (stable)
+    /planner_goal  (geometry_msgs/PoseStamped) — mission goal from navigator
 
 Publishes:
   /waypoints     (nav_msgs/Path)  — pruned A* path (waypoints for navigator)
@@ -155,7 +155,7 @@ class AStarPlanner(Node):
         self._tf_buffer   = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
-        self.create_subscription(OccupancyGrid, '/map',          self._map_cb,  10)
+        self.create_subscription(OccupancyGrid, '/map',          self._map_cb, 10)
         self.create_subscription(PoseStamped,   '/planner_goal', self._goal_cb, 10)
 
         self.path_pub = self.create_publisher(Path, '/waypoints',    10)

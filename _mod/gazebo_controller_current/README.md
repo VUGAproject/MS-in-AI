@@ -18,7 +18,7 @@ diffdrive_pid  ← /controller_goal  → /cmd_vel
 ```
 
 **Data flow:**
-`Static map → A* planner → waypoint path → navigator → PID controller → cmd_vel`
+`Occupancy grid map → A* planner → waypoint path → navigator → PID controller → cmd_vel`
 
 ## Build and run
 

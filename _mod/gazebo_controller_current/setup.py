@@ -32,6 +32,7 @@ setup(
             'diffdrive_pid = gazebo_controller.diffdrive_pid:main',
             'map_publisher = gazebo_controller.map_publisher:main',
             'goal_points_publisher = gazebo_controller.goal_points_publisher:main',
+            'lidar_mapper = gazebo_controller.lidar_mapper:main',
             'astar_planner = gazebo_controller.astar_planner:main',
             'navigator = gazebo_controller.navigator:main',
         ],

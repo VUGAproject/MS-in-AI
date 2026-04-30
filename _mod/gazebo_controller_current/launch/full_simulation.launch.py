@@ -119,7 +119,7 @@ def generate_launch_description():
         )
 
         return [gazebo, spawn_entities, bridge,
-                pid_controller, astar_planner, navigator, rviz]
+            pid_controller, astar_planner, navigator, rviz]
 
     return LaunchDescription([
         maze_arg,
