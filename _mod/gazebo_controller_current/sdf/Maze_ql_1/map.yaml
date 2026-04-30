@@ -1,0 +1,43 @@
+# Map definition for Maze_ql_1
+# Generated from maze_world.sdf geometry
+# Walls approximated as axis-aligned bounding boxes
+resolution: 0.05
+
+# Map dimensions in meters
+width: 12.0
+height: 12.0
+
+# Origin (bottom-left corner) in meters
+origin_x: -6.0
+origin_y: -6.0
+
+# Wall definitions: [center_x, center_y, size_x, size_y]
+# Derived from SDF link poses, sizes, and yaw angles
+walls:
+  # Outer boundary walls (shared with Maze_hr)
+  # Wall_11_clone: pose=(-4.44, 0.74), yaw=-1.571(vertical), size=7.43x0.15
+  - [-4.44, 0.74, 0.15, 7.43]
+  # Wall_7: pose=(2.90, 0.74), yaw=1.571(vertical), size=7.42x0.15
+  - [2.90, 0.74, 0.15, 7.42]
+  # Wall_6_clone: pose=(-0.72, 4.38), yaw=0(horizontal), size=7.42x0.15
+  - [-0.72, 4.38, 7.42, 0.15]
+  # Wall_6: pose=(-0.79, -2.89), yaw=0(horizontal), size=7.35x0.15
+  - [-0.79, -2.89, 7.35, 0.15]
+
+  # Inner walls (Maze_ql_1 specific)
+  # Wall_10: pose=(-2.03, 2.92), yaw=3.142(horizontal), size=1.87x0.15
+  - [-2.03, 2.92, 1.87, 0.15]
+  # Wall_11: pose=(-2.89, 0.69), yaw=-1.571(vertical), size=4.62x0.15
+  - [-2.89, 0.69, 0.15, 4.62]
+  # Wall_14: pose=(-0.41, -1.55), yaw=3.142(horizontal), size=2.37x0.15
+  - [-0.41, -1.55, 2.37, 0.15]
+  # Wall_15: pose=(-1.53, -0.51), yaw=1.571(vertical), size=2.07x0.15
+  - [-1.53, -0.51, 0.15, 2.07]
+  # Wall_19: pose=(0.84, 0.01), yaw=3.142(horizontal), size=1.33x0.15
+  - [0.84, 0.01, 1.33, 0.15]
+  # Wall_20: pose=(-0.49, 1.40), yaw=2.024 (diagonal ~116°), size=3.23x0.15
+  - [-0.49, 1.40, 2.10, 2.60]
+  # Wall_24: pose=(1.84, 2.80), yaw=-0.949 (diagonal ~-54°), size=3.77x0.15
+  - [1.84, 2.80, 2.20, 3.00]
+  # Wall_24_clone: pose=(-1.02, -1.00), yaw=-0.804 (diagonal), size=1.50x0.15
+  - [-1.02, -1.00, 1.00, 1.20]
