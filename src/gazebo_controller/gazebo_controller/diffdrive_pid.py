@@ -192,10 +192,32 @@ class DiffDrivePID(Node):
         y_r = self.robot_state[1]
         th_r = self.robot_state[2]
 
-        if np.linalg.norm(self.desired_goal - np.array([x_r, y_r])) < self.goal_tolerance:
+        robot_pos = np.array([x_r, y_r])
+        dist_to_goal = np.linalg.norm(self.desired_goal - robot_pos)
+
+        if dist_to_goal < self.goal_tolerance:
             self.has_goal = False
             self.Xp_last = None
             return np.array([0.0, 0.0])
+
+        # Singularity check: when dist(robot, goal) ≈ lookahead AND robot faces the goal,
+        # the hitch point lands on the goal → p_err collapses → cmd_vel ≈ 0 indefinitely.
+        # Detect this by checking how close the hitch point is to the goal.
+        X_p_check = np.array([x_r + self.length * np.cos(th_r),
+                               y_r + self.length * np.sin(th_r)])
+        if np.linalg.norm(self.desired_goal - X_p_check) < 0.12:
+            # Fall back to direct proportional bearing control to escape the dead zone.
+            goal_angle = np.arctan2(self.desired_goal[1] - y_r, self.desired_goal[0] - x_r)
+            heading_err = normalize_angle(goal_angle - th_r)
+            lx = float(np.clip(self.k_p * dist_to_goal, 0.0, self.max_linear_vel))
+            az = float(np.clip(self.k_p * 1.5 * heading_err,
+                               -self.max_angular_vel, self.max_angular_vel))
+            if abs(heading_err) > self.heading_rotate_threshold:
+                lx = 0.0
+            elif abs(heading_err) > self.heading_slowdown_threshold:
+                lx *= max(self.min_turn_speed_scale, 1.0 - abs(heading_err))
+            self.Xp_last = X_p_check
+            return np.array([lx, az])
 
         # Compute a trailer hitch point in front of the agent
         X_p = np.array([x_r + self.length * np.cos(th_r),
