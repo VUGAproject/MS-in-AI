@@ -49,7 +49,7 @@ class AStarPlanner(Node):
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_cb, 20)
         self.goals_sub = self.create_subscription(MarkerArray, '/goal_points', self.goals_cb, 10)
 
-        self.goal_pub = self.create_publisher(PoseStamped, '/goal_pose', 10)
+        self.goal_pub = self.create_publisher(PoseStamped, '/planner_goal_pose', 10)
         self.path_pub = self.create_publisher(Path, '/planned_path', 10)
 
         self.timer = self.create_timer(0.1, self.tick)

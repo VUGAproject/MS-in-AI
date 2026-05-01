@@ -83,7 +83,7 @@ class DiffDrivePID(Node):
 
         # I/O
         qos_profile = QoSProfile(depth=10)
-        self.goal_sub = self.create_subscription(PoseStamped, '/goal_pose', self.goal_received, 10)
+        self.goal_sub = self.create_subscription(PoseStamped, '/planner_goal_pose', self.goal_received, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_received, 20)
         self.vel_pub = self.create_publisher(Twist, '/cmd_vel', qos_profile)
         self.trail_pub = self.create_publisher(Path, '/robot_trail', 10)
