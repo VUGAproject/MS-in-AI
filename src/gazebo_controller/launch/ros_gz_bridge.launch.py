@@ -18,11 +18,6 @@ def generate_launch_description():
            '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
            '/joint_states@sensor_msgs/msg/JointState[gz.msgs.Model',
            '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
-           '/lidar@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
-           '/model/vehicle_blue/pose@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V'],
-       remappings=[
-           ('/tf_static', '/tf_static'),
-           ('/model/vehicle_blue/pose', '/tf'),
-       ])
+           '/lidar@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan'])
 
    return LaunchDescription([bridge])

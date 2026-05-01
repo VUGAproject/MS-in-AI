@@ -320,7 +320,7 @@ class AStarPlanner(Node):
         msg = PoseStamped()
         msg.header = Header()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'map'
+        msg.header.frame_id = 'odom'
         msg.pose.position.x = float(xy[0])
         msg.pose.position.y = float(xy[1])
         msg.pose.position.z = 0.0

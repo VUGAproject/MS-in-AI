@@ -136,8 +136,12 @@ class DiffDrivePID(Node):
         """Callback for goal pose messages"""
         # Check if goal is in the correct frame (odom)
         goal_frame = msg.header.frame_id
-        
-        if goal_frame != 'odom' and goal_frame != '':
+
+        # In this project launch, map and odom are intentionally aligned.
+        if goal_frame == 'map':
+            self.desired_goal = np.array([msg.pose.position.x, msg.pose.position.y])
+            self.get_logger().info(f'Goal set to: [{self.desired_goal[0]:.3f}, {self.desired_goal[1]:.3f}] using map=odom alignment')
+        elif goal_frame != 'odom' and goal_frame != '':
             self.get_logger().warn(f'Goal received in frame "{goal_frame}" but expecting "odom". Attempting to transform...')
             try:
                 # Try to transform the goal to odom frame
