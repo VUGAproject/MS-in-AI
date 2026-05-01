@@ -12,6 +12,12 @@ def generate_launch_description():
     pkg_share = get_package_share_directory('gazebo_controller')
 
     # Declare maze selection argument
+    drive_profile_arg = DeclareLaunchArgument(
+        'drive_profile',
+        default_value='fast',
+        description='Controller tuning profile: fast or presentation_safe'
+    )
+
     map_folder_arg = DeclareLaunchArgument(
         'map_folder',
         default_value='basic_maze',
@@ -27,6 +33,7 @@ def generate_launch_description():
     def launch_setup(context):
         maze_alias = context.perform_substitution(LaunchConfiguration('maze'))
         maze_from_map_folder = context.perform_substitution(LaunchConfiguration('map_folder'))
+        drive_profile = context.perform_substitution(LaunchConfiguration('drive_profile'))
         maze_folder = maze_alias if maze_alias else maze_from_map_folder
         world_file = os.path.join(pkg_share, 'sdf', maze_folder, 'maze_world.sdf')
 
@@ -49,6 +56,26 @@ def generate_launch_description():
             'waypoint_stride_cells': 6,
             'obstacle_inflation_cells': 2,
         }
+
+        if drive_profile == 'presentation_safe':
+            pid_params.update({
+                'kp': 0.95,
+                'kd': 0.45,
+                'lookahead': 0.50,
+                'publish_rate': 35.0,
+                'max_linear_vel': 1.15,
+                'max_angular_vel': 2.2,
+                'goal_tolerance': 0.22,
+                'heading_rotate_threshold': 1.00,
+                'heading_slowdown_threshold': 0.35,
+                'min_turn_speed_scale': 0.25,
+                'base_frame': 'vehicle_blue/base_link',
+            })
+            planner_params.update({
+                'goal_reach_tolerance': 0.30,
+                'waypoint_stride_cells': 4,
+                'obstacle_inflation_cells': 3,
+            })
 
         if maze_folder == 'Maze_ng':
             # Dense maze: keep faster than baseline, but preserve tighter turn margin.
@@ -88,6 +115,40 @@ def generate_launch_description():
                 'obstacle_inflation_cells': 2,
                 'goal_reach_tolerance': 0.45,
             })
+
+        # Keep per-maze behavior but cap to safer limits under presentation profile.
+        if drive_profile == 'presentation_safe':
+            if maze_folder == 'Maze_ng':
+                pid_params.update({
+                    'max_linear_vel': 1.00,
+                    'max_angular_vel': 2.3,
+                    'lookahead': 0.48,
+                    'heading_rotate_threshold': 0.95,
+                })
+                planner_params.update({
+                    'waypoint_stride_cells': 3,
+                    'obstacle_inflation_cells': 4,
+                })
+            elif maze_folder == 'Maze_hr':
+                pid_params.update({
+                    'max_linear_vel': 1.15,
+                    'max_angular_vel': 2.2,
+                    'lookahead': 0.50,
+                })
+                planner_params.update({
+                    'waypoint_stride_cells': 4,
+                    'obstacle_inflation_cells': 3,
+                })
+            elif maze_folder == 'Maze_ql_1':
+                pid_params.update({
+                    'max_linear_vel': 1.30,
+                    'max_angular_vel': 2.2,
+                    'lookahead': 0.55,
+                })
+                planner_params.update({
+                    'waypoint_stride_cells': 5,
+                    'obstacle_inflation_cells': 3,
+                })
 
         # Launch Gazebo with the world
         gazebo = IncludeLaunchDescription(
@@ -151,6 +212,7 @@ def generate_launch_description():
         ]
 
     return LaunchDescription([
+        drive_profile_arg,
         map_folder_arg,
         maze_arg,
         OpaqueFunction(function=launch_setup)

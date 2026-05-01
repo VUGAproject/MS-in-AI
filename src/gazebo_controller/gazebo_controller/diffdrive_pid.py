@@ -60,6 +60,7 @@ class DiffDrivePID(Node):
         self.declare_parameter('heading_rotate_threshold', 1.2)
         self.declare_parameter('heading_slowdown_threshold', 0.45)
         self.declare_parameter('min_turn_speed_scale', 0.35)
+        self.declare_parameter('base_frame', 'vehicle_blue/base_link')
 
         self.k_p = float(self.get_parameter('kp').get_parameter_value().double_value)
         self.k_d = float(self.get_parameter('kd').get_parameter_value().double_value)
@@ -72,6 +73,7 @@ class DiffDrivePID(Node):
         self.heading_rotate_threshold = float(self.get_parameter('heading_rotate_threshold').get_parameter_value().double_value)
         self.heading_slowdown_threshold = float(self.get_parameter('heading_slowdown_threshold').get_parameter_value().double_value)
         self.min_turn_speed_scale = float(self.get_parameter('min_turn_speed_scale').get_parameter_value().double_value)
+        self.base_frame = self.get_parameter('base_frame').get_parameter_value().string_value
         self.dt = 1.0 / self.publish_rate
 
         # TF
@@ -91,7 +93,7 @@ class DiffDrivePID(Node):
 
         # TF frames
         self._to_frame = 'odom'
-        self._from_frame = 'base_link'
+        self._from_frame_candidates = [self.base_frame, 'base_link', 'vehicle_blue/base_link']
 
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
@@ -208,16 +210,19 @@ class DiffDrivePID(Node):
 
     def publish_robot_cmd(self):
         """Main control loop callback"""
-        try:
-            when = rclpy.time.Time()
-            trans = self._tf_buffer.lookup_transform(
-                self._to_frame, self._from_frame,
-                when, timeout=Duration(seconds=5.0))
-        except tf2_ros.LookupException:
-            self.get_logger().warn('Transform isn\'t available, waiting...')
-            return
-        except Exception as e:
-            self.get_logger().warn(f'TF lookup failed: {str(e)}')
+        trans = None
+        for from_frame in self._from_frame_candidates:
+            try:
+                when = rclpy.time.Time()
+                trans = self._tf_buffer.lookup_transform(
+                    self._to_frame, from_frame,
+                    when, timeout=Duration(seconds=0.2))
+                break
+            except Exception:
+                continue
+
+        if trans is None:
+            self.get_logger().warn('Transform map/odom -> base frame is not available yet, waiting...')
             return
 
         pose = trans.transform.translation

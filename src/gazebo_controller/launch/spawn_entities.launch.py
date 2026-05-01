@@ -123,6 +123,14 @@ def generate_launch_description():
             output='screen'
         )
 
+        # Alias the scoped Gazebo base frame to the conventional base_link frame.
+        base_link_alias_tf = Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            arguments=['0', '0', '0', '0', '0', '0', 'vehicle_blue/base_link', 'base_link'],
+            output='screen'
+        )
+
         # Robot state publisher
         robot_state_publisher = Node(
             package='robot_state_publisher',
@@ -160,6 +168,7 @@ def generate_launch_description():
             static_tf,
             maze_world_tf,
             lidar_tf,
+            base_link_alias_tf,
             robot_state_publisher,
             map_publisher,
             goal_points_publisher
