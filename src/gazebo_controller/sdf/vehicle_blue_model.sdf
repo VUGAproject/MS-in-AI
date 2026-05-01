@@ -275,8 +275,8 @@
            <wheel_separation>0.24</wheel_separation>
            <wheel_radius>0.08</wheel_radius>
            <odom_publish_frequency>30</odom_publish_frequency>
-           <max_wheel_torque>2.0</max_wheel_torque>
-           <max_wheel_acceleration>0.75</max_wheel_acceleration>
+           <max_wheel_torque>12.0</max_wheel_torque>
+           <max_wheel_acceleration>6.0</max_wheel_acceleration>
            <topic>/cmd_vel</topic>
            <odom_topic>/odom</odom_topic>
            <frame_id>odom</frame_id>

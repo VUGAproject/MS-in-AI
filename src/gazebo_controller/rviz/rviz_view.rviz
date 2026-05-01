@@ -212,7 +212,18 @@ Visualization Manager:
       Class: rviz_default_plugins/Path
       Color: 255; 0; 255
       Enabled: true
+      Head Diameter: 0.20000000298023224
+      Head Length: 0.20000000298023224
+      Length: 0.30000001192092896
+      Line Style: Lines
+      Line Width: 0.05000000074505806
       Name: RobotTrail
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -225,7 +236,18 @@ Visualization Manager:
       Class: rviz_default_plugins/Path
       Color: 255; 127; 255
       Enabled: true
+      Head Diameter: 0.15000000596046448
+      Head Length: 0.15000000596046448
+      Length: 0.25
+      Line Style: Lines
+      Line Width: 0.03999999910593033
       Name: PlannedPath
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 170; 255
+      Pose Style: None
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -305,7 +327,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: odom
+    Fixed Frame: map
     Frame Rate: 30
   Name: root
   Tools:
