@@ -105,7 +105,7 @@ def generate_launch_description():
         static_tf = Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=[robot_pose['x'], robot_pose['y'],  robot_pose['z'], robot_pose['yaw'],  '0', '0', 'map', 'odom'],
+            arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom'],
             output='screen'
         )
         
