@@ -184,7 +184,12 @@ class DiffDrivePID(Node):
         self.has_goal = True
 
     def compute_vel(self):
-        """Compute velocity commands using PID control on trailer hitch point"""
+        """Go-to-goal proportional controller.
+
+        Computes (linear_x, angular_z) to steer the robot toward self.desired_goal.
+        Uses proportional control on bearing and distance. Never commands reverse.
+        Turns in place when heading error is large before moving forward.
+        """
         if not self.has_goal:
             return np.array([0.0, 0.0])
 
@@ -192,79 +197,35 @@ class DiffDrivePID(Node):
         y_r = self.robot_state[1]
         th_r = self.robot_state[2]
 
-        robot_pos = np.array([x_r, y_r])
-        dist_to_goal = np.linalg.norm(self.desired_goal - robot_pos)
+        dx = self.desired_goal[0] - x_r
+        dy = self.desired_goal[1] - y_r
+        dist = float(np.sqrt(dx * dx + dy * dy))
 
-        if dist_to_goal < self.goal_tolerance:
+        if dist < self.goal_tolerance:
             self.has_goal = False
             self.Xp_last = None
             return np.array([0.0, 0.0])
 
-        # Singularity check: when dist(robot, goal) ≈ lookahead AND robot faces the goal,
-        # the hitch point lands on the goal → p_err collapses → cmd_vel ≈ 0 indefinitely.
-        # Detect this by checking how close the hitch point is to the goal.
-        X_p_check = np.array([x_r + self.length * np.cos(th_r),
-                               y_r + self.length * np.sin(th_r)])
-        if np.linalg.norm(self.desired_goal - X_p_check) < 0.12:
-            # Fall back to direct proportional bearing control to escape the dead zone.
-            goal_angle = np.arctan2(self.desired_goal[1] - y_r, self.desired_goal[0] - x_r)
-            heading_err = normalize_angle(goal_angle - th_r)
-            lx = float(np.clip(self.k_p * dist_to_goal, 0.0, self.max_linear_vel))
-            az = float(np.clip(self.k_p * 1.5 * heading_err,
+        goal_angle = np.arctan2(dy, dx)
+        heading_err = normalize_angle(goal_angle - th_r)
+        abs_err = abs(heading_err)
+
+        # Turn in place when significantly misaligned before driving forward.
+        if abs_err > self.heading_rotate_threshold:
+            az = float(np.clip(self.k_p * 2.0 * heading_err,
                                -self.max_angular_vel, self.max_angular_vel))
-            if abs(heading_err) > self.heading_rotate_threshold:
-                lx = 0.0
-            elif abs(heading_err) > self.heading_slowdown_threshold:
-                lx *= max(self.min_turn_speed_scale, 1.0 - abs(heading_err))
-            self.Xp_last = X_p_check
-            return np.array([lx, az])
+            return np.array([0.0, az])
 
-        # Compute a trailer hitch point in front of the agent
-        X_p = np.array([x_r + self.length * np.cos(th_r),
-                        y_r + self.length * np.sin(th_r)])
+        # Drive forward; slow down when still correcting heading.
+        lx = float(np.clip(self.k_p * dist, 0.0, self.max_linear_vel))
+        if abs_err > self.heading_slowdown_threshold:
+            lx *= max(self.min_turn_speed_scale, 1.0 - abs_err)
 
-        # Compute the proportional error between the desired position and the final position
-        # The [:,None] prefix reshapes the vector from (2,) to (2,1)
-        p_err = (self.desired_goal - X_p)[:, None]
+        az = float(np.clip(self.k_p * 2.0 * heading_err,
+                           -self.max_angular_vel, self.max_angular_vel))
 
-        if self.Xp_last is None:
-            # If this is the first timestep we do not compute the derivative or integral terms
-            d_err = 0
-            i_err = 0
-            p_err_last = None
-        else:
-            # Compute previous error
-            p_err_last = (self.desired_goal - self.Xp_last)[:, None]
-            
-            # Derivative is the rate of change of error
-            d_err = (p_err - p_err_last) / self.dt
-
-            # We use the Trapezoidal rule to integrate the error
-            i_err = self.dt * (p_err + p_err_last) / 2
-
-        inv_rot = np.array([[np.cos(th_r), np.sin(th_r)],
-                           [-np.sin(th_r), np.cos(th_r)]])
-        
-        V = inv_rot @ (self.k_p * p_err - self.k_d * d_err + self.k_i * i_err)
-        linear_x = V[0, 0]
-        angular_z = V[1, 0] / self.length
-
-        # Clamp velocities
-        linear_x = np.clip(linear_x, -self.max_linear_vel, self.max_linear_vel)
-        angular_z = np.clip(angular_z, -self.max_angular_vel, self.max_angular_vel)
-
-        # In narrow mazes, turning first avoids clipping walls with aggressive forward motion.
-        goal_heading = np.arctan2(self.desired_goal[1] - y_r, self.desired_goal[0] - x_r)
-        heading_error = normalize_angle(goal_heading - th_r)
-        abs_heading_error = np.abs(heading_error)
-        if abs_heading_error > self.heading_rotate_threshold:
-            linear_x = 0.0
-        elif abs_heading_error > self.heading_slowdown_threshold:
-            linear_x *= max(self.min_turn_speed_scale, 1.0 - abs_heading_error)
-
-        self.Xp_last = X_p
-
-        return np.array([linear_x, angular_z])
+        self.Xp_last = None  # not used by this controller
+        return np.array([lx, az])
 
     def publish_robot_cmd(self):
         """Main control loop callback"""
