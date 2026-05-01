@@ -216,6 +216,11 @@ class AStarPlanner(Node):
             return []
         stride = max(1, self.waypoint_stride_cells)
         sampled = path_rc[::stride]
+        # Do not command the current start cell as a waypoint; it can produce near-zero cmd_vel.
+        if sampled and sampled[0] == path_rc[0] and len(path_rc) > 1:
+            sampled = sampled[1:]
+        if not sampled:
+            sampled = [path_rc[-1]]
         if sampled[-1] != path_rc[-1]:
             sampled.append(path_rc[-1])
         return [self.grid_to_world(r, c) for r, c in sampled]
