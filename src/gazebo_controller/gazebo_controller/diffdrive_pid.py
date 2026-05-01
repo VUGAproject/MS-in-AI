@@ -8,6 +8,7 @@ from rclpy.qos import QoSProfile
 from rclpy.duration import Duration
 
 from geometry_msgs.msg import PoseStamped, Twist
+from nav_msgs.msg import Odometry, Path
 import tf2_ros
 
 def euler_from_quaternion(quaternion):
@@ -83,13 +84,20 @@ class DiffDrivePID(Node):
         # I/O
         qos_profile = QoSProfile(depth=10)
         self.goal_sub = self.create_subscription(PoseStamped, '/goal_pose', self.goal_received, 10)
+        self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_received, 20)
         self.vel_pub = self.create_publisher(Twist, '/cmd_vel', qos_profile)
+        self.trail_pub = self.create_publisher(Path, '/robot_trail', 10)
 
         # State
         self.desired_goal = np.array([0.0, 0.0])
         self.robot_state = np.array([0.0, 0.0, 0.0])
         self.Xp_last = None
         self.has_goal = False
+        self.has_odom = False
+
+        self.trail_path = Path()
+        self.trail_path.header.frame_id = 'odom'
+        self.last_trail_xy = None
 
         # TF frames
         self._to_frame = 'odom'
@@ -99,6 +107,30 @@ class DiffDrivePID(Node):
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
 
         self.get_logger().info(f'DiffDrivePID started: kp={self.k_p}, kd={self.k_d}, ki={self.k_i}, lookahead={self.length}, rate={self.publish_rate} Hz')
+
+    def odom_received(self, msg):
+        pose = msg.pose.pose.position
+        orientation = msg.pose.pose.orientation
+        _, _, yaw = euler_from_quaternion(orientation)
+        self.robot_state = np.array([pose.x, pose.y, yaw])
+        self.has_odom = True
+
+        # Keep a lightweight trail for RViz path visualization.
+        cur_xy = (pose.x, pose.y)
+        if self.last_trail_xy is None or np.linalg.norm(np.array(cur_xy) - np.array(self.last_trail_xy)) > 0.05:
+            p = PoseStamped()
+            p.header.stamp = self.get_clock().now().to_msg()
+            p.header.frame_id = 'odom'
+            p.pose.position.x = float(pose.x)
+            p.pose.position.y = float(pose.y)
+            p.pose.position.z = 0.0
+            p.pose.orientation.w = 1.0
+            self.trail_path.header.stamp = p.header.stamp
+            self.trail_path.poses.append(p)
+            if len(self.trail_path.poses) > 2000:
+                self.trail_path.poses = self.trail_path.poses[-2000:]
+            self.trail_pub.publish(self.trail_path)
+            self.last_trail_xy = cur_xy
 
     def goal_received(self, msg):
         """Callback for goal pose messages"""
@@ -210,25 +242,27 @@ class DiffDrivePID(Node):
 
     def publish_robot_cmd(self):
         """Main control loop callback"""
-        trans = None
-        for from_frame in self._from_frame_candidates:
-            try:
-                when = rclpy.time.Time()
-                trans = self._tf_buffer.lookup_transform(
-                    self._to_frame, from_frame,
-                    when, timeout=Duration(seconds=0.2))
-                break
-            except Exception:
-                continue
+        if not self.has_odom:
+            # Fallback to TF only until odom is available.
+            trans = None
+            for from_frame in self._from_frame_candidates:
+                try:
+                    when = rclpy.time.Time()
+                    trans = self._tf_buffer.lookup_transform(
+                        self._to_frame, from_frame,
+                        when, timeout=Duration(seconds=0.2))
+                    break
+                except Exception:
+                    continue
 
-        if trans is None:
-            self.get_logger().warn('Transform map/odom -> base frame is not available yet, waiting...')
-            return
+            if trans is None:
+                self.get_logger().warn('No /odom or TF base transform yet; waiting before publishing motion commands')
+                return
 
-        pose = trans.transform.translation
-        orientation = trans.transform.rotation
-        roll, pitch, yaw = euler_from_quaternion(orientation)
-        self.robot_state = np.array([pose.x, pose.y, yaw])
+            pose = trans.transform.translation
+            orientation = trans.transform.rotation
+            _, _, yaw = euler_from_quaternion(orientation)
+            self.robot_state = np.array([pose.x, pose.y, yaw])
 
         desired_vel = self.compute_vel()
 

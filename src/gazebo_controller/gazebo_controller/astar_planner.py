@@ -142,6 +142,13 @@ class AStarPlanner(Node):
             self.failed_goals.add(next_goal)
             return
 
+        start_rc = self.find_nearest_free(start_rc)
+        goal_rc = self.find_nearest_free(goal_rc)
+        if start_rc is None or goal_rc is None:
+            self.get_logger().warn(f'No nearby free cell for start/goal toward {next_goal}; trying others')
+            self.failed_goals.add(next_goal)
+            return
+
         path_rc = self.a_star(start_rc, goal_rc)
         if not path_rc:
             self.get_logger().warn(f'No path found to goal {next_goal}; trying others')
@@ -265,6 +272,33 @@ class AStarPlanner(Node):
                     heapq.heappush(open_heap, (f, nxt))
 
         return []
+
+    def find_nearest_free(self, rc: Tuple[int, int], max_radius: int = 12) -> Optional[Tuple[int, int]]:
+        assert self.occ_grid is not None
+        r0, c0 = rc
+        h, w = self.occ_grid.shape
+        if 0 <= r0 < h and 0 <= c0 < w and self.occ_grid[r0, c0] < 50:
+            return (r0, c0)
+
+        for radius in range(1, max_radius + 1):
+            r_min = max(0, r0 - radius)
+            r_max = min(h - 1, r0 + radius)
+            c_min = max(0, c0 - radius)
+            c_max = min(w - 1, c0 + radius)
+            best = None
+            best_d = float('inf')
+            for r in range(r_min, r_max + 1):
+                for c in range(c_min, c_max + 1):
+                    if self.occ_grid[r, c] >= 50:
+                        continue
+                    d = (r - r0) * (r - r0) + (c - c0) * (c - c0)
+                    if d < best_d:
+                        best_d = d
+                        best = (r, c)
+            if best is not None:
+                return best
+
+        return None
 
     def reconstruct_path(self, came_from, current):
         path = [current]
