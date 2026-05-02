@@ -60,7 +60,7 @@ class DiffDrivePID(Node):
         self.declare_parameter('max_angular_vel', 1.5)
         self.declare_parameter('angular_scale', 0.7)  # Scale down angular commands
         self.declare_parameter('goal_tolerance', 0.25)
-        self.declare_parameter('heading_rotate_threshold', 1.2)
+        self.declare_parameter('heading_rotate_threshold', 2.0)
         self.declare_parameter('heading_slowdown_threshold', 0.45)
         self.declare_parameter('min_turn_speed_scale', 0.35)
         self.declare_parameter('base_frame', 'vehicle_blue/base_link')
@@ -111,6 +111,7 @@ class DiffDrivePID(Node):
         self._recovery_direction = 1.0
         self._stuck_last_xy = None
         self._stuck_last_time = None
+        self._stuck_last_heading = 0.0
         self._recovery_total = int(3.0 * self.publish_rate)  # 3 s of recovery
         self._recovery_back_frames = int(1.0 * self.publish_rate)  # first 1 s: back up straight
 
@@ -229,9 +230,13 @@ class DiffDrivePID(Node):
         if self._stuck_last_time is None:
             self._stuck_last_xy = cur_pos.copy()
             self._stuck_last_time = now
+            self._stuck_last_heading = th_r
         elif now - self._stuck_last_time > 3.0:
             moved = float(np.linalg.norm(cur_pos - self._stuck_last_xy))
-            if moved < 0.15:  # less than 15 cm in 3 s — stuck
+            turned = abs(normalize_angle(th_r - self._stuck_last_heading))
+            # Only declare stuck if robot barely moved AND barely turned.
+            # A robot arcing through a corner has large heading change — not stuck.
+            if moved < 0.15 and turned < 0.5:
                 goal_angle = np.arctan2(dy, dx)
                 err = normalize_angle(goal_angle - th_r)
                 self._recovery_direction = 1.0 if err >= 0 else -1.0
@@ -241,6 +246,7 @@ class DiffDrivePID(Node):
             else:
                 self._stuck_last_xy = cur_pos.copy()
                 self._stuck_last_time = now
+                self._stuck_last_heading = th_r
 
         # ── LiDAR gap navigation ───────────────────────────────────────────
         goal_angle = np.arctan2(dy, dx)
