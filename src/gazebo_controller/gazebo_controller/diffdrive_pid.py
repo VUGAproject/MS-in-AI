@@ -107,8 +107,8 @@ class DiffDrivePID(Node):
         self.recovery_phase = 0  # 1 = reversing, 2 = turning
         self.STUCK_DIST = 0.06       # metres — must move this far to count as progress
         self.STUCK_TIMEOUT = 2.5    # seconds without progress → stuck
-        self.RECOVER_REVERSE_T = 0.7  # seconds of reverse
-        self.RECOVER_TURN_T = 1.2    # seconds of in-place turn after reversing
+        self.RECOVER_REVERSE_T = 0.3  # seconds of reverse
+        self.RECOVER_TURN_T = 0.4    # seconds of in-place turn after reversing
 
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
@@ -290,7 +290,7 @@ class DiffDrivePID(Node):
                     dy = self.desired_goal[1] - self.robot_state[1]
                     goal_angle = np.arctan2(dy, dx)
                     herr = normalize_angle(goal_angle - self.robot_state[2])
-                    desired_vel = np.array([0.0, float(np.sign(herr)) * self.max_angular_vel * 0.8])
+                    desired_vel = np.array([0.0, float(np.sign(herr)) * self.max_angular_vel * 0.5])
                 else:
                     self.recovery_active = False
                     self.last_progress_xy = cur_xy
