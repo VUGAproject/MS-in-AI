@@ -312,7 +312,7 @@ class DiffDrivePID(Node):
 
             # When struggling > 5 s: lower clearance bar and widen cone so the
             # robot "sees" tight or diagonal paths it was previously ignoring.
-            MIN_CLEAR = 0.35 if struggling else 0.55
+            MIN_CLEAR = 0.35 if struggling else 0.80
             blocked_cone = 1.047 if struggling else 0.785  # ±60° escalated, ±45° normal
             open_mask = rng > MIN_CLEAR
 
@@ -358,30 +358,6 @@ class DiffDrivePID(Node):
                     # Blend: 95% gap center, 5% goal — strongly follow corridor geometry
                     blended = 0.95 * best_center + 0.05 * heading_to_goal
                     steer = normalize_angle(blended)
-
-        # ── Option C: side-wall clearance correction (independent of gap nav) ──
-        # If any ray in the ±30°–90° side arcs is closer than 0.45 m, nudge the
-        # steer angle away from that wall. This fires even when the forward path
-        # is clear, preventing the robot from hugging inner corners.
-        if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
-            n_s = len(self._lidar_ranges)
-            rng_s = np.where(
-                np.isfinite(self._lidar_ranges) & (self._lidar_ranges > 0.28),
-                self._lidar_ranges, 30.0)
-            WALL_THRESH = 0.45   # m — trigger distance
-            NUDGE_SCALE = 0.4    # how strongly to nudge (radians per metre of intrusion)
-            left_min = 30.0
-            right_min = 30.0
-            for i in range(n_s):
-                ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
-                if 0.52 < ray_a < 1.57:     # left side  ~30°–90°
-                    left_min = min(left_min, rng_s[i])
-                elif -1.57 < ray_a < -0.52:  # right side ~30°–90°
-                    right_min = min(right_min, rng_s[i])
-            left_intrusion  = max(0.0, WALL_THRESH - left_min)
-            right_intrusion = max(0.0, WALL_THRESH - right_min)
-            nudge = NUDGE_SCALE * (right_intrusion - left_intrusion)
-            steer = normalize_angle(steer + nudge)
 
         # ── Heading and velocity control ────────────────────────────────────
         heading_err = float(normalize_angle(steer))
