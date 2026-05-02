@@ -112,8 +112,8 @@ class DiffDrivePID(Node):
         self._stuck_last_xy = None
         self._stuck_last_time = None
         self._stuck_last_heading = 0.0
-        self._recovery_total = int(3.0 * self.publish_rate)  # 3 s of recovery
-        self._recovery_back_frames = int(1.0 * self.publish_rate)  # first 1 s: back up straight
+        self._recovery_total = int(1.5 * self.publish_rate)  # 1.5 s total recovery
+        self._recovery_back_frames = int(0.5 * self.publish_rate)  # first 0.5 s: back up straight
 
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
@@ -219,8 +219,14 @@ class DiffDrivePID(Node):
                     # Phase 1: back up straight to clear the wall
                     return np.array([-0.3, 0.0])
                 else:
-                    # Phase 2: turn in place toward goal
-                    return np.array([0.0, self._recovery_direction * self.max_angular_vel])
+                    # Phase 2: gentle forward arc toward goal — no full U-turn needed
+                    goal_angle_rec = np.arctan2(
+                        self.desired_goal[1] - self.robot_state[1],
+                        self.desired_goal[0] - self.robot_state[0])
+                    err_rec = normalize_angle(goal_angle_rec - self.robot_state[2])
+                    az_rec = float(np.clip(self.k_p * 2.0 * err_rec,
+                                          -self.max_angular_vel, self.max_angular_vel))
+                    return np.array([0.3, az_rec])
             # Recovery done — reset and resume normal driving
             self._recovering = False
             self._stuck_last_xy = cur_pos.copy()
@@ -271,7 +277,7 @@ class DiffDrivePID(Node):
                 for i in range(n)
                 if abs(normalize_angle(
                     (self._lidar_angle_min + i * self._lidar_angle_inc) - heading_to_goal
-                )) < 0.35  # ±20° cone
+                )) < 0.52  # ±30° cone — catches diagonal walls earlier
             )
 
             if direct_blocked:
@@ -300,12 +306,13 @@ class DiffDrivePID(Node):
                         center_angle = self._lidar_angle_min + mid_i * self._lidar_angle_inc
                         angular_dist = abs(normalize_angle(center_angle - heading_to_goal))
                         gap_width = end - start + 1
-                        score = float(gap_width) * np.exp(-1.2 * angular_dist)
+                        score = float(gap_width) * np.exp(-0.7 * angular_dist)
                         if score > best_score:
                             best_score = score
                             best_center = center_angle
-                    # Blend: 60% gap center, 40% goal — gives margin without obsessing
-                    blended = 0.6 * best_center + 0.4 * heading_to_goal
+                    # Blend: 70% gap center, 30% goal — trust the corridor geometry
+                    # for diagonal hallways; still drifts toward destination
+                    blended = 0.7 * best_center + 0.3 * heading_to_goal
                     steer = normalize_angle(blended)
 
         # ── Heading and velocity control ────────────────────────────────────
