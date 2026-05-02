@@ -222,17 +222,37 @@ class DiffDrivePID(Node):
             self._recovery_frames += 1
             if self._recovery_frames < self._recovery_total:
                 if self._recovery_frames < self._recovery_back_frames:
-                    # Phase 1: back up straight to clear the wall
+                    # Phase 1: back up straight to create separation from the wall
                     return np.array([-0.3, 0.0])
                 else:
-                    # Phase 2: gentle forward arc toward goal — no full U-turn needed
-                    goal_angle_rec = np.arctan2(
-                        self.desired_goal[1] - self.robot_state[1],
-                        self.desired_goal[0] - self.robot_state[0])
-                    err_rec = normalize_angle(goal_angle_rec - self.robot_state[2])
-                    az_rec = float(np.clip(self.k_p * 2.0 * err_rec,
-                                          -self.max_angular_vel, self.max_angular_vel))
-                    return np.array([0.3, az_rec])
+                    # Phase 2: drive toward the most open direction in the full 360°
+                    # scan — prioritises space over goal direction so the robot
+                    # escapes the wall even if the goal is straight into it.
+                    if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
+                        best_a = 0.0
+                        best_r = -1.0
+                        for i in range(len(self._lidar_ranges)):
+                            r = self._lidar_ranges[i]
+                            if not np.isfinite(r) or r <= 0.28:
+                                r = 0.0
+                            if r > best_r:
+                                best_r = r
+                                best_a = self._lidar_angle_min + i * self._lidar_angle_inc
+                        # best_a is robot-frame; steer toward it
+                        az_esc = float(np.clip(self.k_p * 2.0 * best_a,
+                                               -self.max_angular_vel, self.max_angular_vel))
+                        # Move forward only if not pointing backward (|best_a| < 90°)
+                        lx_esc = 0.3 if abs(best_a) < 1.57 else 0.0
+                        return np.array([lx_esc, az_esc])
+                    else:
+                        # No LiDAR data yet — fall back to goal direction
+                        goal_angle_rec = np.arctan2(
+                            self.desired_goal[1] - self.robot_state[1],
+                            self.desired_goal[0] - self.robot_state[0])
+                        err_rec = normalize_angle(goal_angle_rec - self.robot_state[2])
+                        az_rec = float(np.clip(self.k_p * 2.0 * err_rec,
+                                               -self.max_angular_vel, self.max_angular_vel))
+                        return np.array([0.3, az_rec])
             # Recovery done — reset and resume normal driving
             self._recovering = False
             self._stuck_last_xy = cur_pos.copy()
@@ -312,7 +332,7 @@ class DiffDrivePID(Node):
 
             # When struggling > 5 s: lower clearance bar and widen cone so the
             # robot "sees" tight or diagonal paths it was previously ignoring.
-            MIN_CLEAR = 0.35 if struggling else 0.80
+            MIN_CLEAR = 0.35 if struggling else 0.55
             blocked_cone = 1.047 if struggling else 0.785  # ±60° escalated, ±45° normal
             open_mask = rng > MIN_CLEAR
 
