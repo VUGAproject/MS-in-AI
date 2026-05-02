@@ -9,6 +9,7 @@ from rclpy.duration import Duration
 
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, Path
+from sensor_msgs.msg import LaserScan
 from tf2_msgs.msg import TFMessage
 import tf2_ros
 
@@ -98,6 +99,12 @@ class DiffDrivePID(Node):
         self.trail_path.header.frame_id = 'map'
         self.last_trail_xy = None
 
+        # LiDAR gap-navigation state
+        self._lidar_ranges = None
+        self._lidar_angle_min = 0.0
+        self._lidar_angle_inc = 0.1745
+        self.lidar_sub = self.create_subscription(LaserScan, '/lidar', self.lidar_cb, 10)
+
         # Stuck recovery state
         self._recovering = False
         self._recovery_frames = 0
@@ -111,6 +118,11 @@ class DiffDrivePID(Node):
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
 
         self.get_logger().info(f'DiffDrivePID started: kp={self.k_p}, kd={self.k_d}, ki={self.k_i}, lookahead={self.length}, rate={self.publish_rate} Hz')
+
+    def lidar_cb(self, msg: LaserScan):
+        self._lidar_ranges = np.array(msg.ranges, dtype=float)
+        self._lidar_angle_min = float(msg.angle_min)
+        self._lidar_angle_inc = float(msg.angle_increment)
 
     def true_pose_cb(self, msg: TFMessage):
         """Receive Gazebo ground-truth world position.
@@ -179,7 +191,7 @@ class DiffDrivePID(Node):
         self.has_goal = True
 
     def compute_vel(self):
-        """Go-to-goal controller with stuck-recovery fallback."""
+        """Go-to-goal controller with LiDAR gap navigation and stuck-recovery fallback."""
         if not self.has_goal:
             self._stuck_last_time = None
             self._recovering = False
@@ -230,9 +242,47 @@ class DiffDrivePID(Node):
                 self._stuck_last_xy = cur_pos.copy()
                 self._stuck_last_time = now
 
-        # ── Normal go-to-goal ───────────────────────────────────────────────
+        # ── LiDAR gap navigation ───────────────────────────────────────────
         goal_angle = np.arctan2(dy, dx)
-        heading_err = normalize_angle(goal_angle - th_r)
+        # Default: steer straight toward goal (angle is relative to robot heading)
+        heading_to_goal = normalize_angle(goal_angle - th_r)
+        steer = heading_to_goal
+
+        if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
+            n = len(self._lidar_ranges)
+            # Replace self-detections (< 0.28 m) and invalid values with max range
+            rng = np.where(
+                np.isfinite(self._lidar_ranges) & (self._lidar_ranges > 0.28),
+                self._lidar_ranges,
+                30.0
+            )
+            # Count blocked rays in ±25° cone directly toward goal
+            blocked = 0
+            for i in range(n):
+                ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
+                if abs(normalize_angle(ray_a - heading_to_goal)) < 0.44:  # ±25°
+                    if rng[i] < 0.55:
+                        blocked += 1
+
+            if blocked > 0:
+                # Path to goal is obstructed — find the best open gap.
+                # Score each ray by free space weighted by closeness to goal direction.
+                best_score = -1.0
+                best_ray = heading_to_goal
+                for i in range(n):
+                    ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
+                    # Only look in the forward ±120° sector to avoid U-turns
+                    if abs(ray_a) > 2.09:
+                        continue
+                    angular_dist = abs(normalize_angle(ray_a - heading_to_goal))
+                    score = rng[i] * np.exp(-1.5 * angular_dist)
+                    if score > best_score:
+                        best_score = score
+                        best_ray = ray_a
+                steer = best_ray
+
+        # ── Heading and velocity control ────────────────────────────────────
+        heading_err = float(steer)   # already robot-frame relative angle
         abs_err = abs(heading_err)
 
         if abs_err > self.heading_rotate_threshold:
