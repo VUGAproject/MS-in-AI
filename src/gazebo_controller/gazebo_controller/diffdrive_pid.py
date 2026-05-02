@@ -9,6 +9,7 @@ from rclpy.duration import Duration
 
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, Path
+from tf2_msgs.msg import TFMessage
 import tf2_ros
 
 def euler_from_quaternion(quaternion):
@@ -77,14 +78,12 @@ class DiffDrivePID(Node):
         self.base_frame = self.get_parameter('base_frame').get_parameter_value().string_value
         self.dt = 1.0 / self.publish_rate
 
-        # TF - used to look up map→base_link which gives true world position
-        self._tf_buffer = tf2_ros.Buffer()
-        self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
-
         # I/O
         qos_profile = QoSProfile(depth=10)
         self.goal_sub = self.create_subscription(PoseStamped, '/planner_goal_pose', self.goal_received, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_received, 20)
+        # Ground truth pose from Gazebo PosePublisher plugin (world frame, no drift).
+        self.pose_sub = self.create_subscription(TFMessage, '/model/vehicle_blue/pose', self.true_pose_cb, 10)
         self.vel_pub = self.create_publisher(Twist, '/cmd_vel', qos_profile)
         self.trail_pub = self.create_publisher(Path, '/robot_trail', 10)
 
@@ -112,8 +111,20 @@ class DiffDrivePID(Node):
 
         self.get_logger().info(f'DiffDrivePID started: kp={self.k_p}, kd={self.k_d}, ki={self.k_i}, lookahead={self.length}, rate={self.publish_rate} Hz')
 
+    def true_pose_cb(self, msg: TFMessage):
+        """Receive Gazebo ground-truth pose for vehicle_blue/base_link.
+        These are world-frame coordinates — same frame as the A* map grid.
+        No wheel-slip drift, no wall-collision drift."""
+        for tf in msg.transforms:
+            if tf.child_frame_id in ('vehicle_blue/base_link', 'vehicle_blue::base_link'):
+                t = tf.transform.translation
+                _, _, yaw = euler_from_quaternion(tf.transform.rotation)
+                self.robot_state = np.array([float(t.x), float(t.y), yaw])
+                self.has_odom = True
+                return
+
     def odom_received(self, msg):
-        self.has_odom = True  # signal robot is alive; TF gives true world position
+        self.has_odom = True  # fallback signal only; true_pose_cb provides position
 
     def goal_received(self, msg):
         """Callback for goal pose messages"""
@@ -233,17 +244,8 @@ class DiffDrivePID(Node):
 
     def publish_robot_cmd(self):
         """Main control loop callback"""
-        # Get true world position from TF map→base_link.
-        try:
-            trans = self._tf_buffer.lookup_transform(
-                'map', 'base_link', rclpy.time.Time(), timeout=Duration(seconds=0.05))
-            pose = trans.transform.translation
-            _, _, yaw = euler_from_quaternion(trans.transform.rotation)
-            self.robot_state = np.array([float(pose.x), float(pose.y), yaw])
-            self.has_odom = True
-        except Exception:
-            if not self.has_odom:
-                return  # nothing yet; keep last known state
+        if not self.has_odom:
+            return  # wait for first ground-truth pose
 
         # Append world position to trail for RViz visualization.
         cur_xy = (self.robot_state[0], self.robot_state[1])

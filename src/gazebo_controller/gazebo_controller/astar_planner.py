@@ -11,6 +11,7 @@ from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rclpy.duration import Duration
 from rclpy.node import Node
 from std_msgs.msg import Header
+from tf2_msgs.msg import TFMessage
 from visualization_msgs.msg import MarkerArray
 
 
@@ -47,6 +48,7 @@ class AStarPlanner(Node):
 
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_cb, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_cb, 20)
+        self.pose_sub = self.create_subscription(TFMessage, '/model/vehicle_blue/pose', self.true_pose_cb, 10)
         self.goals_sub = self.create_subscription(MarkerArray, '/goal_points', self.goals_cb, 10)
 
         self.goal_pub = self.create_publisher(PoseStamped, '/planner_goal_pose', 10)
@@ -64,36 +66,23 @@ class AStarPlanner(Node):
         grid = np.array(msg.data, dtype=np.int16).reshape((h, w))
         self.occ_grid = self.inflate_obstacles(grid, self.obstacle_inflation_cells)
 
+    def true_pose_cb(self, msg: TFMessage):
+        """Ground-truth world position from Gazebo PosePublisher. No drift."""
+        for tf in msg.transforms:
+            if tf.child_frame_id in ('vehicle_blue/base_link', 'vehicle_blue::base_link'):
+                self.robot_map_xy = (
+                    float(tf.transform.translation.x),
+                    float(tf.transform.translation.y),
+                )
+                return
+
     def odom_cb(self, msg: Odometry):
-        # Use TF map→base_link to get robot world position.
-        # map→odom is a static TF encoding the spawn offset, so
-        # map→odom→base_link gives the correct world position.
-        try:
-            trans = self.tf_buffer.lookup_transform(
-                'map', 'base_link', rclpy.time.Time(), timeout=Duration(seconds=0.05)
-            )
+        # Only used as fallback if ground-truth topic not yet received.
+        if self.robot_map_xy is None:
             self.robot_map_xy = (
-                float(trans.transform.translation.x),
-                float(trans.transform.translation.y),
+                float(msg.pose.pose.position.x),
+                float(msg.pose.pose.position.y),
             )
-            return
-        except Exception:
-            pass
-        # Fallback: apply map→odom transform to raw odom position.
-        ox = msg.pose.pose.position.x
-        oy = msg.pose.pose.position.y
-        try:
-            trans = self.tf_buffer.lookup_transform(
-                'map', 'odom', rclpy.time.Time(), timeout=Duration(seconds=0.2)
-            )
-            tx = trans.transform.translation.x
-            ty = trans.transform.translation.y
-            yaw = yaw_from_quaternion(trans.transform.rotation)
-            c = math.cos(yaw)
-            s = math.sin(yaw)
-            self.robot_map_xy = (c * ox - s * oy + tx, s * ox + c * oy + ty)
-        except Exception:
-            self.robot_map_xy = (ox, oy)
 
     def goals_cb(self, msg: MarkerArray):
         goals = []
