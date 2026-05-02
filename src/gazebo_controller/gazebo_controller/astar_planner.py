@@ -65,12 +65,35 @@ class AStarPlanner(Node):
         self.occ_grid = self.inflate_obstacles(grid, self.obstacle_inflation_cells)
 
     def odom_cb(self, msg: Odometry):
-        # Gazebo's DiffDrive initializes odom at the world spawn position,
-        # so odom x,y is in the same coordinate frame as the A* map grid.
-        self.robot_map_xy = (
-            float(msg.pose.pose.position.x),
-            float(msg.pose.pose.position.y),
-        )
+        # Use TF map→base_link to get robot world position.
+        # map→odom is a static TF encoding the spawn offset, so
+        # map→odom→base_link gives the correct world position.
+        try:
+            trans = self.tf_buffer.lookup_transform(
+                'map', 'base_link', rclpy.time.Time(), timeout=Duration(seconds=0.05)
+            )
+            self.robot_map_xy = (
+                float(trans.transform.translation.x),
+                float(trans.transform.translation.y),
+            )
+            return
+        except Exception:
+            pass
+        # Fallback: apply map→odom transform to raw odom position.
+        ox = msg.pose.pose.position.x
+        oy = msg.pose.pose.position.y
+        try:
+            trans = self.tf_buffer.lookup_transform(
+                'map', 'odom', rclpy.time.Time(), timeout=Duration(seconds=0.2)
+            )
+            tx = trans.transform.translation.x
+            ty = trans.transform.translation.y
+            yaw = yaw_from_quaternion(trans.transform.rotation)
+            c = math.cos(yaw)
+            s = math.sin(yaw)
+            self.robot_map_xy = (c * ox - s * oy + tx, s * ox + c * oy + ty)
+        except Exception:
+            self.robot_map_xy = (ox, oy)
 
     def goals_cb(self, msg: MarkerArray):
         goals = []

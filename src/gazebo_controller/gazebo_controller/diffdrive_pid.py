@@ -77,6 +77,10 @@ class DiffDrivePID(Node):
         self.base_frame = self.get_parameter('base_frame').get_parameter_value().string_value
         self.dt = 1.0 / self.publish_rate
 
+        # TF - used to look up map→base_link which gives true world position
+        self._tf_buffer = tf2_ros.Buffer()
+        self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
+
         # I/O
         qos_profile = QoSProfile(depth=10)
         self.goal_sub = self.create_subscription(PoseStamped, '/planner_goal_pose', self.goal_received, 10)
@@ -221,9 +225,18 @@ class DiffDrivePID(Node):
 
     def publish_robot_cmd(self):
         """Main control loop callback"""
-        if not self.has_odom:
-            self.get_logger().warn('Waiting for /odom...', throttle_duration_sec=5.0)
-            return
+        # Prefer TF map→base_link which, with the spawn-encoded map→odom static TF,
+        # gives the robot's true world position. Fall back to raw /odom if TF not ready.
+        try:
+            trans = self._tf_buffer.lookup_transform(
+                'map', 'base_link', rclpy.time.Time(), timeout=Duration(seconds=0.05))
+            pose = trans.transform.translation
+            _, _, yaw = euler_from_quaternion(trans.transform.rotation)
+            self.robot_state = np.array([float(pose.x), float(pose.y), yaw])
+            self.has_odom = True
+        except Exception:
+            if not self.has_odom:
+                return  # nothing yet
 
         desired_vel = self.compute_vel()
 
