@@ -60,7 +60,7 @@ class DiffDrivePID(Node):
         self.declare_parameter('max_angular_vel', 1.5)
         self.declare_parameter('angular_scale', 0.7)  # Scale down angular commands
         self.declare_parameter('goal_tolerance', 0.25)
-        self.declare_parameter('heading_rotate_threshold', 2.0)
+        self.declare_parameter('heading_rotate_threshold', 2.3)
         self.declare_parameter('heading_slowdown_threshold', 0.45)
         self.declare_parameter('min_turn_speed_scale', 0.35)
         self.declare_parameter('base_frame', 'vehicle_blue/base_link')
@@ -277,7 +277,7 @@ class DiffDrivePID(Node):
                 for i in range(n)
                 if abs(normalize_angle(
                     (self._lidar_angle_min + i * self._lidar_angle_inc) - heading_to_goal
-                )) < 0.52  # ±30° cone — catches diagonal walls earlier
+                )) < 0.785  # ±45° cone — catches diagonal walls
             )
 
             if direct_blocked:
@@ -310,9 +310,8 @@ class DiffDrivePID(Node):
                         if score > best_score:
                             best_score = score
                             best_center = center_angle
-                    # Blend: 70% gap center, 30% goal — trust the corridor geometry
-                    # for diagonal hallways; still drifts toward destination
-                    blended = 0.7 * best_center + 0.3 * heading_to_goal
+                    # Blend: 90% gap center, 10% goal — strongly follow corridor geometry
+                    blended = 0.9 * best_center + 0.1 * heading_to_goal
                     steer = normalize_angle(blended)
 
         # ── Heading and velocity control ────────────────────────────────────
