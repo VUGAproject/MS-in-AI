@@ -65,9 +65,23 @@ class AStarPlanner(Node):
         self.occ_grid = self.inflate_obstacles(grid, self.obstacle_inflation_cells)
 
     def odom_cb(self, msg: Odometry):
+        # Use true Gazebo world position via TF (avoids odom drift on collision).
+        for frame in ('vehicle_blue/base_link', 'vehicle_blue'):
+            try:
+                trans = self.tf_buffer.lookup_transform(
+                    'map', frame, rclpy.time.Time(), timeout=Duration(seconds=0.05)
+                )
+                self.robot_map_xy = (
+                    float(trans.transform.translation.x),
+                    float(trans.transform.translation.y),
+                )
+                return
+            except Exception:
+                continue
+
+        # Fallback: transform odom position to map (only correct if map→odom encodes spawn offset).
         ox = msg.pose.pose.position.x
         oy = msg.pose.pose.position.y
-
         try:
             trans = self.tf_buffer.lookup_transform(
                 'map', 'odom', rclpy.time.Time(), timeout=Duration(seconds=0.2)
@@ -77,11 +91,8 @@ class AStarPlanner(Node):
             yaw = yaw_from_quaternion(trans.transform.rotation)
             c = math.cos(yaw)
             s = math.sin(yaw)
-            mx = c * ox - s * oy + tx
-            my = s * ox + c * oy + ty
-            self.robot_map_xy = (mx, my)
+            self.robot_map_xy = (c * ox - s * oy + tx, s * ox + c * oy + ty)
         except Exception:
-            # Fallback for environments where odom and map are effectively aligned.
             self.robot_map_xy = (ox, oy)
 
     def goals_cb(self, msg: MarkerArray):
@@ -325,7 +336,7 @@ class AStarPlanner(Node):
         msg = PoseStamped()
         msg.header = Header()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = 'odom'
+        msg.header.frame_id = 'map'
         msg.pose.position.x = float(xy[0])
         msg.pose.position.y = float(xy[1])
         msg.pose.position.z = 0.0
