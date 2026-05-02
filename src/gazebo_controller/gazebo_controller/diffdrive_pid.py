@@ -77,10 +77,6 @@ class DiffDrivePID(Node):
         self.base_frame = self.get_parameter('base_frame').get_parameter_value().string_value
         self.dt = 1.0 / self.publish_rate
 
-        # TF
-        self._tf_buffer = tf2_ros.Buffer()
-        self.listener = tf2_ros.TransformListener(self._tf_buffer, self)
-
         # I/O
         qos_profile = QoSProfile(depth=10)
         self.goal_sub = self.create_subscription(PoseStamped, '/planner_goal_pose', self.goal_received, 10)
@@ -99,21 +95,34 @@ class DiffDrivePID(Node):
         self.trail_path.header.frame_id = 'map'
         self.last_trail_xy = None
 
-        # TF frames — use true Gazebo world position.
-        # 'vehicle_blue' resolves via maze_world→vehicle_blue (absolute Gazebo pose).
-        # 'vehicle_blue/base_link' goes through odom→vehicle_blue/base_link (drift-prone), avoid it first.
-        self._to_frame = 'map'
-        self._from_frame_candidates = ['vehicle_blue', 'base_link']
-
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
 
         self.get_logger().info(f'DiffDrivePID started: kp={self.k_p}, kd={self.k_d}, ki={self.k_i}, lookahead={self.length}, rate={self.publish_rate} Hz')
 
     def odom_received(self, msg):
-        # /odom only signals that Gazebo DiffDrive is alive.
-        # True robot position comes from the Gazebo TF in publish_robot_cmd.
+        pose = msg.pose.pose.position
+        orientation = msg.pose.pose.orientation
+        _, _, yaw = euler_from_quaternion(orientation)
+        self.robot_state = np.array([pose.x, pose.y, yaw])
         self.has_odom = True
+
+        # Append position to trail for RViz visualization.
+        cur_xy = (pose.x, pose.y)
+        if self.last_trail_xy is None or np.linalg.norm(np.array(cur_xy) - np.array(self.last_trail_xy)) > 0.05:
+            p = PoseStamped()
+            p.header.stamp = self.get_clock().now().to_msg()
+            p.header.frame_id = 'map'
+            p.pose.position.x = float(pose.x)
+            p.pose.position.y = float(pose.y)
+            p.pose.position.z = 0.0
+            p.pose.orientation.w = 1.0
+            self.trail_path.header.stamp = p.header.stamp
+            self.trail_path.poses.append(p)
+            if len(self.trail_path.poses) > 2000:
+                self.trail_path.poses = self.trail_path.poses[-2000:]
+            self.trail_pub.publish(self.trail_path)
+            self.last_trail_xy = cur_xy
 
     def goal_received(self, msg):
         """Callback for goal pose messages"""
@@ -212,45 +221,9 @@ class DiffDrivePID(Node):
 
     def publish_robot_cmd(self):
         """Main control loop callback"""
-        # Always try to get true world position from Gazebo TF (professor's recommendation).
-        # This is accurate even when the robot collides with walls (odom drifts on collision).
-        got_true_pos = False
-        for frame in self._from_frame_candidates:
-            try:
-                trans = self._tf_buffer.lookup_transform(
-                    self._to_frame, frame,
-                    rclpy.time.Time(), timeout=Duration(seconds=0.05))
-                pose = trans.transform.translation
-                _, _, yaw = euler_from_quaternion(trans.transform.rotation)
-                self.robot_state = np.array([float(pose.x), float(pose.y), yaw])
-                got_true_pos = True
-                break
-            except Exception:
-                continue
-
-        if not got_true_pos:
-            if not self.has_odom:
-                self.get_logger().warn('Waiting for robot position (TF and /odom unavailable)...')
-                return
-            # robot_state keeps its last value from the previous cycle
-
-        # Append true position to trail for RViz visualization.
-        cur_xy = (self.robot_state[0], self.robot_state[1])
-        if self.last_trail_xy is None or np.linalg.norm(
-                np.array(cur_xy) - np.array(self.last_trail_xy)) > 0.05:
-            p = PoseStamped()
-            p.header.stamp = self.get_clock().now().to_msg()
-            p.header.frame_id = 'map'
-            p.pose.position.x = float(cur_xy[0])
-            p.pose.position.y = float(cur_xy[1])
-            p.pose.position.z = 0.0
-            p.pose.orientation.w = 1.0
-            self.trail_path.header.stamp = p.header.stamp
-            self.trail_path.poses.append(p)
-            if len(self.trail_path.poses) > 2000:
-                self.trail_path.poses = self.trail_path.poses[-2000:]
-            self.trail_pub.publish(self.trail_path)
-            self.last_trail_xy = cur_xy
+        if not self.has_odom:
+            self.get_logger().warn('Waiting for /odom...', throttle_duration_sec=5.0)
+            return
 
         desired_vel = self.compute_vel()
 
