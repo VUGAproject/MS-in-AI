@@ -99,9 +99,11 @@ class DiffDrivePID(Node):
         self.trail_path.header.frame_id = 'map'
         self.last_trail_xy = None
 
-        # TF frames — use true Gazebo world position
+        # TF frames — use true Gazebo world position.
+        # 'vehicle_blue' resolves via maze_world→vehicle_blue (absolute Gazebo pose).
+        # 'vehicle_blue/base_link' goes through odom→vehicle_blue/base_link (drift-prone), avoid it first.
         self._to_frame = 'map'
-        self._from_frame_candidates = ['vehicle_blue/base_link', 'vehicle_blue', 'base_link']
+        self._from_frame_candidates = ['vehicle_blue', 'base_link']
 
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)

@@ -66,7 +66,8 @@ class AStarPlanner(Node):
 
     def odom_cb(self, msg: Odometry):
         # Use true Gazebo world position via TF (avoids odom drift on collision).
-        for frame in ('vehicle_blue/base_link', 'vehicle_blue'):
+        # 'vehicle_blue' resolves via maze_world→vehicle_blue (absolute Gazebo pose).
+        for frame in ('vehicle_blue', 'base_link'):
             try:
                 trans = self.tf_buffer.lookup_transform(
                     'map', frame, rclpy.time.Time(), timeout=Duration(seconds=0.05)
@@ -79,7 +80,7 @@ class AStarPlanner(Node):
             except Exception:
                 continue
 
-        # Fallback: transform odom position to map (only correct if map→odom encodes spawn offset).
+        # Fallback: transform odom position to map.
         ox = msg.pose.pose.position.x
         oy = msg.pose.pose.position.y
         try:
