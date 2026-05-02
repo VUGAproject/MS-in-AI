@@ -111,8 +111,8 @@ class DiffDrivePID(Node):
         self._recovery_direction = 1.0
         self._stuck_last_xy = None
         self._stuck_last_time = None
-        self._recovery_total = int(3.0 * self.publish_rate)  # 3 s of recovery
-        self._recovery_back_frames = int(1.0 * self.publish_rate)  # first 1 s: back up straight
+        self._recovery_total = int(4.5 * self.publish_rate)  # 4.5 s of recovery
+        self._recovery_back_frames = int(1.5 * self.publish_rate)  # first 1.5 s: back up
 
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
@@ -215,12 +215,12 @@ class DiffDrivePID(Node):
             self._recovery_frames += 1
             if self._recovery_frames < self._recovery_total:
                 if self._recovery_frames < self._recovery_back_frames:
-                    # Phase 1: back up straight to clear the wall
-                    return np.array([-0.3, 0.0])
+                    # Phase 1: back up with slight turn to peel off the wall
+                    return np.array([-0.4, self._recovery_direction * 0.5])
                 else:
                     # Phase 2: turn in place toward goal
                     return np.array([0.0, self._recovery_direction * self.max_angular_vel])
-            # Recovery done — reset and resume normal driving
+            # Recovery done — resume normal driving
             self._recovering = False
             self._stuck_last_xy = cur_pos.copy()
             self._stuck_last_time = time.monotonic()
@@ -229,60 +229,99 @@ class DiffDrivePID(Node):
         if self._stuck_last_time is None:
             self._stuck_last_xy = cur_pos.copy()
             self._stuck_last_time = now
-        elif now - self._stuck_last_time > 3.0:
+        elif now - self._stuck_last_time > 2.5:
             moved = float(np.linalg.norm(cur_pos - self._stuck_last_xy))
-            if moved < 0.15:  # less than 15 cm in 3 s — stuck
+            if moved < 0.15:  # < 15 cm in 2.5 s — stuck
                 goal_angle = np.arctan2(dy, dx)
                 err = normalize_angle(goal_angle - th_r)
-                self._recovery_direction = 1.0 if err >= 0 else -1.0
+                recovery_dir = 1.0 if err >= 0 else -1.0
+                # Prefer turning toward whichever side has more clearance
+                if self._lidar_ranges is not None:
+                    nl = len(self._lidar_ranges)
+                    left_sum, right_sum = 0.0, 0.0
+                    for i in range(nl):
+                        ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
+                        r = float(self._lidar_ranges[i]) if np.isfinite(self._lidar_ranges[i]) else 0.0
+                        if 0.17 < ray_a < 1.57:
+                            left_sum += r
+                        elif -1.57 < ray_a < -0.17:
+                            right_sum += r
+                    if left_sum != right_sum:
+                        recovery_dir = 1.0 if left_sum > right_sum else -1.0
+                self._recovery_direction = recovery_dir
                 self._recovering = True
                 self._recovery_frames = 0
-                return np.array([-0.2, self._recovery_direction * self.max_angular_vel])
+                return np.array([-0.4, self._recovery_direction * 0.5])
             else:
                 self._stuck_last_xy = cur_pos.copy()
                 self._stuck_last_time = now
 
         # ── LiDAR gap navigation ───────────────────────────────────────────
         goal_angle = np.arctan2(dy, dx)
-        # Default: steer straight toward goal (angle is relative to robot heading)
-        heading_to_goal = normalize_angle(goal_angle - th_r)
+        heading_to_goal = normalize_angle(goal_angle - th_r)  # robot-frame angle to goal
         steer = heading_to_goal
 
         if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
             n = len(self._lidar_ranges)
-            # Replace self-detections (< 0.28 m) and invalid values with max range
-            rng = np.where(
-                np.isfinite(self._lidar_ranges) & (self._lidar_ranges > 0.28),
-                self._lidar_ranges,
-                30.0
-            )
-            # Count blocked rays in ±25° cone directly toward goal
-            blocked = 0
+            rng = np.array(self._lidar_ranges, dtype=float)
+
+            # Self-filter: only suppress in the REAR arc (|angle| > 130°) where the
+            # robot's own chassis/wheels are visible. Front rays trust readings at any
+            # distance so nearby walls are always detected.
             for i in range(n):
                 ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
-                if abs(normalize_angle(ray_a - heading_to_goal)) < 0.44:  # ±25°
-                    if rng[i] < 0.55:
-                        blocked += 1
+                if not np.isfinite(rng[i]) or rng[i] <= 0.0:
+                    rng[i] = 30.0
+                elif abs(ray_a) > 2.27 and rng[i] < 0.40:  # |angle| > ~130°
+                    rng[i] = 30.0  # own body in rear arc
 
-            if blocked > 0:
-                # Path to goal is obstructed — find the best open gap.
-                # Score each ray by free space weighted by closeness to goal direction.
-                best_score = -1.0
-                best_ray = heading_to_goal
-                for i in range(n):
-                    ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
-                    # Only look in the forward ±120° sector to avoid U-turns
-                    if abs(ray_a) > 2.09:
-                        continue
-                    angular_dist = abs(normalize_angle(ray_a - heading_to_goal))
-                    score = rng[i] * np.exp(-1.5 * angular_dist)
-                    if score > best_score:
-                        best_score = score
-                        best_ray = ray_a
-                steer = best_ray
+            MIN_CLEAR = 0.65  # ray must exceed this to count as "open"
+            open_mask = rng > MIN_CLEAR
+
+            # Check whether the direct path to goal is blocked
+            direct_blocked = any(
+                rng[i] < MIN_CLEAR
+                for i in range(n)
+                if abs(normalize_angle(
+                    (self._lidar_angle_min + i * self._lidar_angle_inc) - heading_to_goal
+                )) < 0.35  # ±20° cone
+            )
+
+            if direct_blocked:
+                # Find contiguous open-ray segments in the forward ±150° sector
+                segments = []
+                j = 0
+                while j < n:
+                    ray_a = self._lidar_angle_min + j * self._lidar_angle_inc
+                    if open_mask[j] and abs(ray_a) <= 2.618:
+                        start = j
+                        while j < n and open_mask[j]:
+                            if abs(self._lidar_angle_min + j * self._lidar_angle_inc) > 2.618:
+                                break
+                            j += 1
+                        segments.append((start, j - 1))
+                    else:
+                        j += 1
+
+                if segments:
+                    # Steer toward the CENTER of the widest gap closest to goal.
+                    # Centering the robot in the gap naturally gives equal clearance
+                    # on both sides of a corridor.
+                    best_score = -1.0
+                    best_center = heading_to_goal
+                    for start, end in segments:
+                        mid_i = (start + end) / 2.0
+                        center_angle = self._lidar_angle_min + mid_i * self._lidar_angle_inc
+                        angular_dist = abs(normalize_angle(center_angle - heading_to_goal))
+                        gap_width = end - start + 1
+                        score = float(gap_width) * np.exp(-1.2 * angular_dist)
+                        if score > best_score:
+                            best_score = score
+                            best_center = center_angle
+                    steer = best_center
 
         # ── Heading and velocity control ────────────────────────────────────
-        heading_err = float(steer)   # already robot-frame relative angle
+        heading_err = float(normalize_angle(steer))
         abs_err = abs(heading_err)
 
         if abs_err > self.heading_rotate_threshold:
