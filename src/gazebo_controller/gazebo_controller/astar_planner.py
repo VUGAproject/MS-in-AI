@@ -45,7 +45,6 @@ class AStarPlanner(Node):
         self.active_goal: Optional[Tuple[float, float]] = None
         self.pending_waypoints: List[Tuple[float, float]] = []
         self.active_waypoint_idx = -1
-        self._replan_count = 0  # replans attempted for the current goal
 
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_cb, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_cb, 20)
@@ -60,35 +59,25 @@ class AStarPlanner(Node):
         self.get_logger().info('AStar planner ready: waiting for /map, /odom, and /goal_points')
 
     def skip_waypoint_cb(self, _msg: Empty):
-        """Called when the controller is stuck. Replan from current position so the
-        robot approaches the goal from a fresh direction rather than retrying the
-        same wall-facing vector."""
-        if self.active_goal is None:
+        """Advance to the next waypoint when the controller signals it is stuck."""
+        if not self.pending_waypoints or self.active_waypoint_idx < 0:
             return
-
-        self._replan_count += 1
-        if self._replan_count >= 3:
-            # Three failed replans for this goal — give up and move on.
+        next_idx = self.active_waypoint_idx + 1
+        if next_idx < len(self.pending_waypoints):
+            self.active_waypoint_idx = next_idx
+            wp = self.pending_waypoints[self.active_waypoint_idx]
             self.get_logger().warn(
-                f'3 replans failed for goal {self.active_goal} — skipping goal')
+                f'Skipping to waypoint {next_idx}/{len(self.pending_waypoints)-1}: {wp}')
+            self.publish_goal_pose(wp)
+        else:
+            # Already at last waypoint; force goal reached so planner moves on
+            self.get_logger().warn('Skip requested at last waypoint — marking goal reached')
             reached = self.active_goal
             self.active_goal = None
             self.pending_waypoints = []
             self.active_waypoint_idx = -1
-            self._replan_count = 0
             if reached and reached in self.remaining_goals:
                 self.remaining_goals.remove(reached)
-            return
-
-        # Force a fresh A* from current robot position to the same goal.
-        # The robot has already backed up slightly, so the new plan will
-        # approach from a different direction.
-        self.get_logger().warn(
-            f'Stuck near goal {self.active_goal} — replanning from current pos '
-            f'(attempt {self._replan_count}/3)')
-        self.pending_waypoints = []
-        self.active_waypoint_idx = -1
-        # Keep active_goal set — tick() will immediately replan toward it.
 
     def map_cb(self, msg: OccupancyGrid):
         self.map_msg = msg
@@ -132,7 +121,6 @@ class AStarPlanner(Node):
             self.active_goal = None
             self.pending_waypoints = []
             self.active_waypoint_idx = -1
-            self._replan_count = 0
             self.get_logger().info(f'Received {len(goals)} goal points')
 
     def tick(self):
@@ -155,7 +143,6 @@ class AStarPlanner(Node):
                 self.active_goal = None
                 self.pending_waypoints = []
                 self.active_waypoint_idx = -1
-                self._replan_count = 0
                 if reached in self.remaining_goals:
                     self.remaining_goals.remove(reached)
                     self.get_logger().info(f'Reached goal {reached}; {len(self.remaining_goals)} goals remaining')
