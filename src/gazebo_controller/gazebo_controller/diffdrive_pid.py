@@ -265,7 +265,7 @@ class DiffDrivePID(Node):
         else:
             self._struggling_since = None
         struggling = (self._struggling_since is not None and
-                      time.monotonic() - self._struggling_since > 3.0)
+                      time.monotonic() - self._struggling_since > 5.0)
 
         # ── LiDAR gap navigation ───────────────────────────────────────────
         goal_angle = np.arctan2(dy, dx)
@@ -281,10 +281,10 @@ class DiffDrivePID(Node):
                 30.0
             )
 
-            # When struggling > 3 s: lower clearance bar and widen cone so the
+            # When struggling > 5 s: lower clearance bar and widen cone so the
             # robot "sees" tight or diagonal paths it was previously ignoring.
-            MIN_CLEAR = 0.25 if struggling else 0.55
-            blocked_cone = 1.309 if struggling else 0.785  # ±75° escalated, ±45° normal
+            MIN_CLEAR = 0.35 if struggling else 0.55
+            blocked_cone = 1.047 if struggling else 0.785  # ±60° escalated, ±45° normal
             open_mask = rng > MIN_CLEAR
 
             # Check whether the direct path to goal is blocked
@@ -326,8 +326,8 @@ class DiffDrivePID(Node):
                         if score > best_score:
                             best_score = score
                             best_center = center_angle
-                    # Blend: 98% gap center, 2% goal — nearly pure corridor-following
-                    blended = 0.98 * best_center + 0.02 * heading_to_goal
+                    # Blend: 95% gap center, 5% goal — strongly follow corridor geometry
+                    blended = 0.95 * best_center + 0.05 * heading_to_goal
                     steer = normalize_angle(blended)
 
         # ── Heading and velocity control ────────────────────────────────────
