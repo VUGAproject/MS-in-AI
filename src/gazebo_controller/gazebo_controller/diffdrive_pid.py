@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
+import time
 import numpy as np
-from time import sleep
 
 import rclpy
 from rclpy.node import Node
@@ -9,7 +9,6 @@ from rclpy.duration import Duration
 
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, Path
-from sensor_msgs.msg import LaserScan
 import tf2_ros
 
 def euler_from_quaternion(quaternion):
@@ -86,7 +85,6 @@ class DiffDrivePID(Node):
         qos_profile = QoSProfile(depth=10)
         self.goal_sub = self.create_subscription(PoseStamped, '/planner_goal_pose', self.goal_received, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_received, 20)
-        self.lidar_sub = self.create_subscription(LaserScan, '/lidar', self.lidar_cb, 10)
         self.vel_pub = self.create_publisher(Twist, '/cmd_vel', qos_profile)
         self.trail_pub = self.create_publisher(Path, '/robot_trail', 10)
 
@@ -101,39 +99,21 @@ class DiffDrivePID(Node):
         self.trail_path.header.frame_id = 'map'
         self.last_trail_xy = None
 
-        # LiDAR obstacle avoidance state
-        self._lidar_ranges = None
-        self._lidar_angle_min = 0.0
-        self._lidar_angle_inc = 0.0
-        self._avoid_dist = 0.40      # start slowing/turning when obstacle this close (m)
-        self._stop_dist  = 0.22      # stop forward motion when obstacle this close (m)
+        # Stuck recovery state
+        self._recovering = False
+        self._recovery_frames = 0
+        self._recovery_direction = 1.0
+        self._stuck_last_xy = None
+        self._stuck_last_time = None
+        self._recovery_total = int(2.0 * self.publish_rate)  # 2 s of recovery
 
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
 
         self.get_logger().info(f'DiffDrivePID started: kp={self.k_p}, kd={self.k_d}, ki={self.k_i}, lookahead={self.length}, rate={self.publish_rate} Hz')
 
-    def lidar_cb(self, msg: LaserScan):
-        self._lidar_ranges = np.array(msg.ranges, dtype=float)
-        self._lidar_angle_min = float(msg.angle_min)
-        self._lidar_angle_inc = float(msg.angle_increment)
-
-    def _sector_min(self, angle_lo: float, angle_hi: float) -> float:
-        """Return minimum finite range in [angle_lo, angle_hi] (radians, robot-frame)."""
-        if self._lidar_ranges is None:
-            return float('inf')
-        idx_lo = int((angle_lo - self._lidar_angle_min) / self._lidar_angle_inc)
-        idx_hi = int((angle_hi - self._lidar_angle_min) / self._lidar_angle_inc)
-        idx_lo = max(0, min(idx_lo, len(self._lidar_ranges) - 1))
-        idx_hi = max(0, min(idx_hi, len(self._lidar_ranges) - 1))
-        if idx_lo > idx_hi:
-            idx_lo, idx_hi = idx_hi, idx_lo
-        sector = self._lidar_ranges[idx_lo:idx_hi + 1]
-        finite = sector[np.isfinite(sector) & (sector > 0.01)]
-        return float(finite.min()) if len(finite) > 0 else float('inf')
-
     def odom_received(self, msg):
-        self.has_odom = True  # signal that robot is alive; TF gives true position
+        self.has_odom = True  # signal robot is alive; TF gives true world position
 
     def goal_received(self, msg):
         """Callback for goal pose messages"""
@@ -187,11 +167,14 @@ class DiffDrivePID(Node):
         self.has_goal = True
 
     def compute_vel(self):
-        """Go-to-goal controller with LiDAR reactive obstacle avoidance."""
+        """Go-to-goal controller with stuck-recovery fallback."""
         if not self.has_goal:
+            self._stuck_last_time = None
+            self._recovering = False
             return np.array([0.0, 0.0])
 
         x_r, y_r, th_r = self.robot_state
+        cur_pos = np.array([x_r, y_r])
 
         dx = self.desired_goal[0] - x_r
         dy = self.desired_goal[1] - y_r
@@ -199,31 +182,40 @@ class DiffDrivePID(Node):
 
         if dist < self.goal_tolerance:
             self.has_goal = False
+            self._recovering = False
+            self._stuck_last_time = None
             return np.array([0.0, 0.0])
 
+        # ── Stuck recovery ──────────────────────────────────────────────────
+        if self._recovering:
+            self._recovery_frames += 1
+            if self._recovery_frames < self._recovery_total:
+                return np.array([-0.2, self._recovery_direction * self.max_angular_vel])
+            # Recovery done — reset and resume normal driving
+            self._recovering = False
+            self._stuck_last_xy = cur_pos.copy()
+            self._stuck_last_time = time.monotonic()
+
+        now = time.monotonic()
+        if self._stuck_last_time is None:
+            self._stuck_last_xy = cur_pos.copy()
+            self._stuck_last_time = now
+        elif now - self._stuck_last_time > 3.0:
+            moved = float(np.linalg.norm(cur_pos - self._stuck_last_xy))
+            if moved < 0.15:  # less than 15 cm in 3 s — stuck
+                goal_angle = np.arctan2(dy, dx)
+                err = normalize_angle(goal_angle - th_r)
+                self._recovery_direction = 1.0 if err >= 0 else -1.0
+                self._recovering = True
+                self._recovery_frames = 0
+                return np.array([-0.2, self._recovery_direction * self.max_angular_vel])
+            else:
+                self._stuck_last_xy = cur_pos.copy()
+                self._stuck_last_time = now
+
+        # ── Normal go-to-goal ───────────────────────────────────────────────
         goal_angle = np.arctan2(dy, dx)
         heading_err = normalize_angle(goal_angle - th_r)
-
-        # ── LiDAR sectors (robot-frame angles) ──────────────────────────────
-        # Front: ±30°, Front-left: 30°–90°, Front-right: -90°–-30°
-        front      = self._sector_min(-0.52, 0.52)   # ±30°
-        front_left = self._sector_min( 0.52, 1.57)   # 30°–90°
-        front_right= self._sector_min(-1.57,-0.52)   # -90°–-30°
-
-        # ── Obstacle avoidance overrides goal-seeking ────────────────────────
-        if front < self._stop_dist:
-            # Too close in front: reverse and turn toward the clearer side.
-            turn_dir = 1.0 if front_left >= front_right else -1.0
-            return np.array([-0.3, turn_dir * self.max_angular_vel])
-
-        if front < self._avoid_dist:
-            # Obstacle approaching: stop forward motion, turn toward clearer side.
-            turn_dir = 1.0 if front_left >= front_right else -1.0
-            az = float(np.clip(turn_dir * self.k_p * 3.0,
-                               -self.max_angular_vel, self.max_angular_vel))
-            return np.array([0.0, az])
-
-        # ── Normal goal-seeking ───────────────────────────────────────────────
         abs_err = abs(heading_err)
 
         if abs_err > self.heading_rotate_threshold:
@@ -234,11 +226,6 @@ class DiffDrivePID(Node):
         lx = float(np.clip(self.k_p * dist, 0.0, self.max_linear_vel))
         if abs_err > self.heading_slowdown_threshold:
             lx *= max(self.min_turn_speed_scale, 1.0 - abs_err)
-
-        # Slow down if a wall is appearing on either side.
-        side_clear = min(front_left, front_right)
-        if side_clear < self._avoid_dist:
-            lx *= max(0.3, side_clear / self._avoid_dist)
 
         az = float(np.clip(self.k_p * 2.0 * heading_err,
                            -self.max_angular_vel, self.max_angular_vel))
