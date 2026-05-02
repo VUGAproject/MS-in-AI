@@ -104,7 +104,8 @@ class DiffDrivePID(Node):
         self._recovery_direction = 1.0
         self._stuck_last_xy = None
         self._stuck_last_time = None
-        self._recovery_total = int(2.0 * self.publish_rate)  # 2 s of recovery
+        self._recovery_total = int(3.0 * self.publish_rate)  # 3 s of recovery
+        self._recovery_back_frames = int(1.0 * self.publish_rate)  # first 1 s: back up straight
 
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
@@ -112,11 +113,11 @@ class DiffDrivePID(Node):
         self.get_logger().info(f'DiffDrivePID started: kp={self.k_p}, kd={self.k_d}, ki={self.k_i}, lookahead={self.length}, rate={self.publish_rate} Hz')
 
     def true_pose_cb(self, msg: TFMessage):
-        """Receive Gazebo ground-truth pose for vehicle_blue/base_link.
-        These are world-frame coordinates — same frame as the A* map grid.
-        No wheel-slip drift, no wall-collision drift."""
+        """Receive Gazebo ground-truth world position.
+        The transform frame_id='maze_world', child_frame_id='vehicle_blue'
+        gives the vehicle's actual world coordinates."""
         for tf in msg.transforms:
-            if tf.child_frame_id in ('vehicle_blue/base_link', 'vehicle_blue::base_link'):
+            if tf.child_frame_id == 'vehicle_blue' and tf.header.frame_id == 'maze_world':
                 t = tf.transform.translation
                 _, _, yaw = euler_from_quaternion(tf.transform.rotation)
                 self.robot_state = np.array([float(t.x), float(t.y), yaw])
@@ -201,7 +202,12 @@ class DiffDrivePID(Node):
         if self._recovering:
             self._recovery_frames += 1
             if self._recovery_frames < self._recovery_total:
-                return np.array([-0.2, self._recovery_direction * self.max_angular_vel])
+                if self._recovery_frames < self._recovery_back_frames:
+                    # Phase 1: back up straight to clear the wall
+                    return np.array([-0.3, 0.0])
+                else:
+                    # Phase 2: turn in place toward goal
+                    return np.array([0.0, self._recovery_direction * self.max_angular_vel])
             # Recovery done — reset and resume normal driving
             self._recovering = False
             self._stuck_last_xy = cur_pos.copy()

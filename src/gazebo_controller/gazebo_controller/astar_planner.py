@@ -67,9 +67,9 @@ class AStarPlanner(Node):
         self.occ_grid = self.inflate_obstacles(grid, self.obstacle_inflation_cells)
 
     def true_pose_cb(self, msg: TFMessage):
-        """Ground-truth world position from Gazebo PosePublisher. No drift."""
+        """Ground-truth world position. Uses maze_world→vehicle_blue transform."""
         for tf in msg.transforms:
-            if tf.child_frame_id in ('vehicle_blue/base_link', 'vehicle_blue::base_link'):
+            if tf.child_frame_id == 'vehicle_blue' and tf.header.frame_id == 'maze_world':
                 self.robot_map_xy = (
                     float(tf.transform.translation.x),
                     float(tf.transform.translation.y),
