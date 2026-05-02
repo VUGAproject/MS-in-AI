@@ -57,7 +57,7 @@ class DiffDrivePID(Node):
         self.declare_parameter('ki', 0.0)
         self.declare_parameter('lookahead', 0.5)  # trailer hitch distance
         self.declare_parameter('publish_rate', 30.0)
-        self.declare_parameter('max_linear_vel', 1.5)
+        self.declare_parameter('max_linear_vel', 2.0)
         self.declare_parameter('max_angular_vel', 1.5)
         self.declare_parameter('angular_scale', 0.7)  # Scale down angular commands
         self.declare_parameter('goal_tolerance', 0.25)
