@@ -99,6 +99,17 @@ class DiffDrivePID(Node):
         self.trail_path.header.frame_id = 'map'
         self.last_trail_xy = None
 
+        # Stuck detection + recovery
+        self.last_progress_xy = None
+        self.last_progress_time = None
+        self.recovery_active = False
+        self.recovery_start_time = None
+        self.recovery_phase = 0  # 1 = reversing, 2 = turning
+        self.STUCK_DIST = 0.06       # metres — must move this far to count as progress
+        self.STUCK_TIMEOUT = 2.5    # seconds without progress → stuck
+        self.RECOVER_REVERSE_T = 0.7  # seconds of reverse
+        self.RECOVER_TURN_T = 1.2    # seconds of in-place turn after reversing
+
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
 
@@ -238,7 +249,55 @@ class DiffDrivePID(Node):
             if not self.has_odom:
                 return  # nothing yet
 
-        desired_vel = self.compute_vel()
+        # ── Stuck detection ──────────────────────────────────────────
+        now_s = self.get_clock().now().nanoseconds * 1e-9
+        cur_xy = (self.robot_state[0], self.robot_state[1])
+
+        if self.has_goal:
+            if self.last_progress_xy is None:
+                self.last_progress_xy = cur_xy
+                self.last_progress_time = now_s
+            elif np.linalg.norm(np.array(cur_xy) - np.array(self.last_progress_xy)) > self.STUCK_DIST:
+                self.last_progress_xy = cur_xy
+                self.last_progress_time = now_s
+                self.recovery_active = False
+            elif (not self.recovery_active and
+                  (now_s - self.last_progress_time) > self.STUCK_TIMEOUT):
+                self.recovery_active = True
+                self.recovery_start_time = now_s
+                self.recovery_phase = 1
+                self.get_logger().warn('Stuck! Reversing to escape wall.')
+        else:
+            self.last_progress_xy = None
+            self.last_progress_time = None
+            self.recovery_active = False
+
+        # ── Recovery override ────────────────────────────────────────
+        if self.recovery_active:
+            elapsed = now_s - self.recovery_start_time
+            if self.recovery_phase == 1:
+                if elapsed < self.RECOVER_REVERSE_T:
+                    desired_vel = np.array([-0.5, 0.0])
+                else:
+                    self.recovery_phase = 2
+                    self.recovery_start_time = now_s
+                    desired_vel = np.array([0.0, 0.0])
+            if self.recovery_phase == 2:
+                elapsed = now_s - self.recovery_start_time
+                if elapsed < self.RECOVER_TURN_T:
+                    # Turn toward goal direction
+                    dx = self.desired_goal[0] - self.robot_state[0]
+                    dy = self.desired_goal[1] - self.robot_state[1]
+                    goal_angle = np.arctan2(dy, dx)
+                    herr = normalize_angle(goal_angle - self.robot_state[2])
+                    desired_vel = np.array([0.0, float(np.sign(herr)) * self.max_angular_vel * 0.8])
+                else:
+                    self.recovery_active = False
+                    self.last_progress_xy = cur_xy
+                    self.last_progress_time = now_s
+                    desired_vel = self.compute_vel()
+        else:
+            desired_vel = self.compute_vel()
 
         msg = Twist()
         msg.linear.x = float(desired_vel[0])
