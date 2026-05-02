@@ -112,6 +112,7 @@ class DiffDrivePID(Node):
         self._stuck_last_xy = None
         self._stuck_last_time = None
         self._stuck_last_heading = 0.0
+        self._struggling_since = None  # tracks how long robot is making poor progress
         self._recovery_total = int(1.5 * self.publish_rate)  # 1.5 s total recovery
         self._recovery_back_frames = int(0.5 * self.publish_rate)  # first 0.5 s: back up straight
 
@@ -209,6 +210,7 @@ class DiffDrivePID(Node):
             self.has_goal = False
             self._recovering = False
             self._stuck_last_time = None
+            self._struggling_since = None
             return np.array([0.0, 0.0])
 
         # ── Stuck recovery ──────────────────────────────────────────────────
@@ -253,6 +255,17 @@ class DiffDrivePID(Node):
                 self._stuck_last_xy = cur_pos.copy()
                 self._stuck_last_time = now
                 self._stuck_last_heading = th_r
+                self._struggling_since = None  # made real progress, reset escalation
+
+        # ── Track struggling (slow movement for > 5 s → widen perception) ────
+        speed_proxy = float(np.linalg.norm(cur_pos - (self._stuck_last_xy if self._stuck_last_xy is not None else cur_pos)))
+        if speed_proxy < 0.05:  # essentially stationary right now
+            if self._struggling_since is None:
+                self._struggling_since = time.monotonic()
+        else:
+            self._struggling_since = None
+        struggling = (self._struggling_since is not None and
+                      time.monotonic() - self._struggling_since > 5.0)
 
         # ── LiDAR gap navigation ───────────────────────────────────────────
         goal_angle = np.arctan2(dy, dx)
@@ -268,7 +281,10 @@ class DiffDrivePID(Node):
                 30.0
             )
 
-            MIN_CLEAR = 0.55  # ray must exceed this to count as open
+            # When struggling > 5 s: lower clearance bar and widen cone so the
+            # robot "sees" tight or diagonal paths it was previously ignoring.
+            MIN_CLEAR = 0.35 if struggling else 0.55
+            blocked_cone = 1.047 if struggling else 0.785  # ±60° escalated, ±45° normal
             open_mask = rng > MIN_CLEAR
 
             # Check whether the direct path to goal is blocked
@@ -277,7 +293,7 @@ class DiffDrivePID(Node):
                 for i in range(n)
                 if abs(normalize_angle(
                     (self._lidar_angle_min + i * self._lidar_angle_inc) - heading_to_goal
-                )) < 0.785  # ±45° cone — catches diagonal walls
+                )) < blocked_cone
             )
 
             if direct_blocked:
@@ -310,8 +326,8 @@ class DiffDrivePID(Node):
                         if score > best_score:
                             best_score = score
                             best_center = center_angle
-                    # Blend: 90% gap center, 10% goal — strongly follow corridor geometry
-                    blended = 0.9 * best_center + 0.1 * heading_to_goal
+                    # Blend: 95% gap center, 5% goal — strongly follow corridor geometry
+                    blended = 0.95 * best_center + 0.05 * heading_to_goal
                     steer = normalize_angle(blended)
 
         # ── Heading and velocity control ────────────────────────────────────
