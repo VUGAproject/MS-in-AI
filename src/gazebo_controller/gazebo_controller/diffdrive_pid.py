@@ -9,6 +9,7 @@ from rclpy.duration import Duration
 
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, Path
+from std_msgs.msg import Empty
 from sensor_msgs.msg import LaserScan
 from tf2_msgs.msg import TFMessage
 import tf2_ros
@@ -87,6 +88,7 @@ class DiffDrivePID(Node):
         self.pose_sub = self.create_subscription(TFMessage, '/model/vehicle_blue/pose', self.true_pose_cb, 10)
         self.vel_pub = self.create_publisher(Twist, '/cmd_vel', qos_profile)
         self.trail_pub = self.create_publisher(Path, '/robot_trail', 10)
+        self.skip_wp_pub = self.create_publisher(Empty, '/skip_waypoint', 10)
 
         # State
         self.desired_goal = np.array([0.0, 0.0])
@@ -112,6 +114,7 @@ class DiffDrivePID(Node):
         self._stuck_last_xy = None
         self._stuck_last_time = None
         self._stuck_last_heading = 0.0
+        self._stuck_count = 0          # consecutive stuck events; triggers waypoint skip
         self._struggling_since = None  # tracks how long robot is making poor progress
         self._recovery_total = int(1.5 * self.publish_rate)  # 1.5 s total recovery
         self._recovery_back_frames = int(0.5 * self.publish_rate)  # first 0.5 s: back up straight
@@ -210,6 +213,7 @@ class DiffDrivePID(Node):
             self.has_goal = False
             self._recovering = False
             self._stuck_last_time = None
+            self._stuck_count = 0
             self._struggling_since = None
             return np.array([0.0, 0.0])
 
@@ -245,9 +249,33 @@ class DiffDrivePID(Node):
             # Only declare stuck if robot barely moved AND barely turned.
             # A robot arcing through a corner has large heading change — not stuck.
             if moved < 0.15 and turned < 0.5:
-                goal_angle = np.arctan2(dy, dx)
-                err = normalize_angle(goal_angle - th_r)
-                self._recovery_direction = 1.0 if err >= 0 else -1.0
+                # Recovery direction: prefer the side with more LiDAR clearance.
+                recovery_dir = 1.0  # default: turn left
+                if self._lidar_ranges is not None:
+                    nl = len(self._lidar_ranges)
+                    left_sum, right_sum = 0.0, 0.0
+                    for i in range(nl):
+                        ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
+                        r = float(self._lidar_ranges[i]) if np.isfinite(self._lidar_ranges[i]) else 0.0
+                        if 0.17 < ray_a < 1.57:   # left arc  ~10°–90°
+                            left_sum += r
+                        elif -1.57 < ray_a < -0.17:  # right arc ~10°–90°
+                            right_sum += r
+                    if right_sum > left_sum:
+                        recovery_dir = -1.0
+                else:
+                    # Fall back to goal-heading direction if no LiDAR data yet
+                    goal_angle = np.arctan2(dy, dx)
+                    err = normalize_angle(goal_angle - th_r)
+                    recovery_dir = 1.0 if err >= 0 else -1.0
+                self._recovery_direction = recovery_dir
+                self._stuck_count += 1
+                # After 2 consecutive stuck events (~6+ s), skip to next waypoint
+                if self._stuck_count >= 2:
+                    self.get_logger().warn(
+                        f'Stuck {self._stuck_count} times consecutively — requesting waypoint skip')
+                    self.skip_wp_pub.publish(Empty())
+                    self._stuck_count = 0
                 self._recovering = True
                 self._recovery_frames = 0
                 return np.array([-0.2, self._recovery_direction * self.max_angular_vel])
@@ -255,6 +283,7 @@ class DiffDrivePID(Node):
                 self._stuck_last_xy = cur_pos.copy()
                 self._stuck_last_time = now
                 self._stuck_last_heading = th_r
+                self._stuck_count = 0          # real progress — reset counter
                 self._struggling_since = None  # made real progress, reset escalation
 
         # ── Track struggling (slow movement for > 5 s → widen perception) ────

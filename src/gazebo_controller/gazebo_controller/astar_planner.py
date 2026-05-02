@@ -10,7 +10,7 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rclpy.duration import Duration
 from rclpy.node import Node
-from std_msgs.msg import Header
+from std_msgs.msg import Header, Empty
 from tf2_msgs.msg import TFMessage
 from visualization_msgs.msg import MarkerArray
 
@@ -53,9 +53,31 @@ class AStarPlanner(Node):
 
         self.goal_pub = self.create_publisher(PoseStamped, '/planner_goal_pose', 10)
         self.path_pub = self.create_publisher(Path, '/planned_path', 10)
+        self.skip_wp_sub = self.create_subscription(Empty, '/skip_waypoint', self.skip_waypoint_cb, 10)
 
         self.timer = self.create_timer(0.1, self.tick)
         self.get_logger().info('AStar planner ready: waiting for /map, /odom, and /goal_points')
+
+    def skip_waypoint_cb(self, _msg: Empty):
+        """Advance to the next waypoint when the controller signals it is stuck."""
+        if not self.pending_waypoints or self.active_waypoint_idx < 0:
+            return
+        next_idx = self.active_waypoint_idx + 1
+        if next_idx < len(self.pending_waypoints):
+            self.active_waypoint_idx = next_idx
+            wp = self.pending_waypoints[self.active_waypoint_idx]
+            self.get_logger().warn(
+                f'Skipping to waypoint {next_idx}/{len(self.pending_waypoints)-1}: {wp}')
+            self.publish_goal_pose(wp)
+        else:
+            # Already at last waypoint; force goal reached so planner moves on
+            self.get_logger().warn('Skip requested at last waypoint — marking goal reached')
+            reached = self.active_goal
+            self.active_goal = None
+            self.pending_waypoints = []
+            self.active_waypoint_idx = -1
+            if reached and reached in self.remaining_goals:
+                self.remaining_goals.remove(reached)
 
     def map_cb(self, msg: OccupancyGrid):
         self.map_msg = msg
