@@ -86,7 +86,7 @@ class DiffDrivePID(Node):
         qos_profile = QoSProfile(depth=10)
         self.goal_sub = self.create_subscription(PoseStamped, '/planner_goal_pose', self.goal_received, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_received, 20)
-        self.scan_sub = self.create_subscription(LaserScan, '/lidar', self.scan_received, 10)
+        self.lidar_sub = self.create_subscription(LaserScan, '/lidar', self.lidar_cb, 10)
         self.vel_pub = self.create_publisher(Twist, '/cmd_vel', qos_profile)
         self.trail_pub = self.create_publisher(Path, '/robot_trail', 10)
 
@@ -101,82 +101,39 @@ class DiffDrivePID(Node):
         self.trail_path.header.frame_id = 'map'
         self.last_trail_xy = None
 
-        # LiDAR reactive avoidance
-        self.scan_ranges = None
-        self.scan_angle_min = 0.0
-        self.scan_angle_increment = 0.0
-        self.LIDAR_DANGER_DIST = 0.30   # metres — obstacle closer than this triggers avoidance
-        self.LIDAR_FRONT_HALF_ANGLE = 0.52  # radians (~30 deg each side of forward)
+        # LiDAR obstacle avoidance state
+        self._lidar_ranges = None
+        self._lidar_angle_min = 0.0
+        self._lidar_angle_inc = 0.0
+        self._avoid_dist = 0.40      # start slowing/turning when obstacle this close (m)
+        self._stop_dist  = 0.22      # stop forward motion when obstacle this close (m)
 
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
 
         self.get_logger().info(f'DiffDrivePID started: kp={self.k_p}, kd={self.k_d}, ki={self.k_i}, lookahead={self.length}, rate={self.publish_rate} Hz')
 
-    def scan_received(self, msg: LaserScan):
-        self.scan_ranges = np.array(msg.ranges, dtype=float)
-        self.scan_angle_min = msg.angle_min
-        self.scan_angle_increment = msg.angle_increment
+    def lidar_cb(self, msg: LaserScan):
+        self._lidar_ranges = np.array(msg.ranges, dtype=float)
+        self._lidar_angle_min = float(msg.angle_min)
+        self._lidar_angle_inc = float(msg.angle_increment)
 
-    def lidar_obstacle_ahead(self):
-        """Returns (blocked, turn_sign) where turn_sign=+1 means turn left, -1 means turn right."""
-        if self.scan_ranges is None:
-            return False, 0
-        r = self.scan_ranges
-        n = len(r)
-        angle_min = self.scan_angle_min
-        inc = self.scan_angle_increment
-        half = self.LIDAR_FRONT_HALF_ANGLE
-        danger = self.LIDAR_DANGER_DIST
-
-        # Split front sector into left half and right half
-        left_blocked = False
-        right_blocked = False
-        for i, dist in enumerate(r):
-            if not np.isfinite(dist) or dist <= 0.01:
-                continue
-            angle = angle_min + i * inc
-            if abs(angle) > half:
-                continue
-            if dist < danger:
-                if angle >= 0:
-                    left_blocked = True
-                else:
-                    right_blocked = True
-
-        blocked = left_blocked or right_blocked
-        if blocked:
-            # Turn away from the more blocked side
-            turn_sign = -1 if left_blocked else 1
-            if left_blocked and right_blocked:
-                turn_sign = -1  # default: turn right
-        else:
-            turn_sign = 0
-        return blocked, turn_sign
+    def _sector_min(self, angle_lo: float, angle_hi: float) -> float:
+        """Return minimum finite range in [angle_lo, angle_hi] (radians, robot-frame)."""
+        if self._lidar_ranges is None:
+            return float('inf')
+        idx_lo = int((angle_lo - self._lidar_angle_min) / self._lidar_angle_inc)
+        idx_hi = int((angle_hi - self._lidar_angle_min) / self._lidar_angle_inc)
+        idx_lo = max(0, min(idx_lo, len(self._lidar_ranges) - 1))
+        idx_hi = max(0, min(idx_hi, len(self._lidar_ranges) - 1))
+        if idx_lo > idx_hi:
+            idx_lo, idx_hi = idx_hi, idx_lo
+        sector = self._lidar_ranges[idx_lo:idx_hi + 1]
+        finite = sector[np.isfinite(sector) & (sector > 0.01)]
+        return float(finite.min()) if len(finite) > 0 else float('inf')
 
     def odom_received(self, msg):
-        pose = msg.pose.pose.position
-        orientation = msg.pose.pose.orientation
-        _, _, yaw = euler_from_quaternion(orientation)
-        self.robot_state = np.array([pose.x, pose.y, yaw])
-        self.has_odom = True
-
-        # Append position to trail for RViz visualization.
-        cur_xy = (pose.x, pose.y)
-        if self.last_trail_xy is None or np.linalg.norm(np.array(cur_xy) - np.array(self.last_trail_xy)) > 0.05:
-            p = PoseStamped()
-            p.header.stamp = self.get_clock().now().to_msg()
-            p.header.frame_id = 'map'
-            p.pose.position.x = float(pose.x)
-            p.pose.position.y = float(pose.y)
-            p.pose.position.z = 0.0
-            p.pose.orientation.w = 1.0
-            self.trail_path.header.stamp = p.header.stamp
-            self.trail_path.poses.append(p)
-            if len(self.trail_path.poses) > 2000:
-                self.trail_path.poses = self.trail_path.poses[-2000:]
-            self.trail_pub.publish(self.trail_path)
-            self.last_trail_xy = cur_xy
+        self.has_odom = True  # signal that robot is alive; TF gives true position
 
     def goal_received(self, msg):
         """Callback for goal pose messages"""
@@ -230,53 +187,66 @@ class DiffDrivePID(Node):
         self.has_goal = True
 
     def compute_vel(self):
-        """Go-to-goal proportional controller.
-
-        Computes (linear_x, angular_z) to steer the robot toward self.desired_goal.
-        Uses proportional control on bearing and distance. Never commands reverse.
-        Turns in place when heading error is large before moving forward.
-        """
+        """Go-to-goal controller with LiDAR reactive obstacle avoidance."""
         if not self.has_goal:
             return np.array([0.0, 0.0])
 
-        x_r = self.robot_state[0]
-        y_r = self.robot_state[1]
-        th_r = self.robot_state[2]
+        x_r, y_r, th_r = self.robot_state
 
         dx = self.desired_goal[0] - x_r
         dy = self.desired_goal[1] - y_r
-        dist = float(np.sqrt(dx * dx + dy * dy))
+        dist = float(np.hypot(dx, dy))
 
         if dist < self.goal_tolerance:
             self.has_goal = False
-            self.Xp_last = None
             return np.array([0.0, 0.0])
 
         goal_angle = np.arctan2(dy, dx)
         heading_err = normalize_angle(goal_angle - th_r)
+
+        # ── LiDAR sectors (robot-frame angles) ──────────────────────────────
+        # Front: ±30°, Front-left: 30°–90°, Front-right: -90°–-30°
+        front      = self._sector_min(-0.52, 0.52)   # ±30°
+        front_left = self._sector_min( 0.52, 1.57)   # 30°–90°
+        front_right= self._sector_min(-1.57,-0.52)   # -90°–-30°
+
+        # ── Obstacle avoidance overrides goal-seeking ────────────────────────
+        if front < self._stop_dist:
+            # Too close in front: reverse and turn toward the clearer side.
+            turn_dir = 1.0 if front_left >= front_right else -1.0
+            return np.array([-0.3, turn_dir * self.max_angular_vel])
+
+        if front < self._avoid_dist:
+            # Obstacle approaching: stop forward motion, turn toward clearer side.
+            turn_dir = 1.0 if front_left >= front_right else -1.0
+            az = float(np.clip(turn_dir * self.k_p * 3.0,
+                               -self.max_angular_vel, self.max_angular_vel))
+            return np.array([0.0, az])
+
+        # ── Normal goal-seeking ───────────────────────────────────────────────
         abs_err = abs(heading_err)
 
-        # Turn in place when significantly misaligned before driving forward.
         if abs_err > self.heading_rotate_threshold:
             az = float(np.clip(self.k_p * 2.0 * heading_err,
                                -self.max_angular_vel, self.max_angular_vel))
             return np.array([0.0, az])
 
-        # Drive forward; slow down when still correcting heading.
         lx = float(np.clip(self.k_p * dist, 0.0, self.max_linear_vel))
         if abs_err > self.heading_slowdown_threshold:
             lx *= max(self.min_turn_speed_scale, 1.0 - abs_err)
 
+        # Slow down if a wall is appearing on either side.
+        side_clear = min(front_left, front_right)
+        if side_clear < self._avoid_dist:
+            lx *= max(0.3, side_clear / self._avoid_dist)
+
         az = float(np.clip(self.k_p * 2.0 * heading_err,
                            -self.max_angular_vel, self.max_angular_vel))
-
-        self.Xp_last = None  # not used by this controller
         return np.array([lx, az])
 
     def publish_robot_cmd(self):
         """Main control loop callback"""
-        # Prefer TF map→base_link which, with the spawn-encoded map→odom static TF,
-        # gives the robot's true world position. Fall back to raw /odom if TF not ready.
+        # Get true world position from TF map→base_link.
         try:
             trans = self._tf_buffer.lookup_transform(
                 'map', 'base_link', rclpy.time.Time(), timeout=Duration(seconds=0.05))
@@ -286,16 +256,27 @@ class DiffDrivePID(Node):
             self.has_odom = True
         except Exception:
             if not self.has_odom:
-                return  # nothing yet
+                return  # nothing yet; keep last known state
 
-        # ── LiDAR reactive avoidance ───────────────────────────────────────────
-        # If the LiDAR sees an obstacle closer than LIDAR_DANGER_DIST directly
-        # ahead, override normal control: stop forward motion and turn away.
-        blocked, turn_sign = self.lidar_obstacle_ahead()
-        if blocked and self.has_goal:
-            desired_vel = np.array([0.0, turn_sign * self.max_angular_vel * 0.6])
-        else:
-            desired_vel = self.compute_vel()
+        # Append world position to trail for RViz visualization.
+        cur_xy = (self.robot_state[0], self.robot_state[1])
+        if self.last_trail_xy is None or np.linalg.norm(
+                np.array(cur_xy) - np.array(self.last_trail_xy)) > 0.05:
+            p = PoseStamped()
+            p.header.stamp = self.get_clock().now().to_msg()
+            p.header.frame_id = 'map'
+            p.pose.position.x = float(cur_xy[0])
+            p.pose.position.y = float(cur_xy[1])
+            p.pose.position.z = 0.0
+            p.pose.orientation.w = 1.0
+            self.trail_path.header.stamp = p.header.stamp
+            self.trail_path.poses.append(p)
+            if len(self.trail_path.poses) > 2000:
+                self.trail_path.poses = self.trail_path.poses[-2000:]
+            self.trail_pub.publish(self.trail_path)
+            self.last_trail_xy = cur_xy
+
+        desired_vel = self.compute_vel()
 
         msg = Twist()
         msg.linear.x = float(desired_vel[0])
