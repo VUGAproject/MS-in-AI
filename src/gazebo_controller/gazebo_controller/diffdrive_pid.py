@@ -9,6 +9,7 @@ from rclpy.duration import Duration
 
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, Path
+from sensor_msgs.msg import LaserScan
 import tf2_ros
 
 def euler_from_quaternion(quaternion):
@@ -85,6 +86,7 @@ class DiffDrivePID(Node):
         qos_profile = QoSProfile(depth=10)
         self.goal_sub = self.create_subscription(PoseStamped, '/planner_goal_pose', self.goal_received, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_received, 20)
+        self.scan_sub = self.create_subscription(LaserScan, '/lidar', self.scan_received, 10)
         self.vel_pub = self.create_publisher(Twist, '/cmd_vel', qos_profile)
         self.trail_pub = self.create_publisher(Path, '/robot_trail', 10)
 
@@ -99,21 +101,58 @@ class DiffDrivePID(Node):
         self.trail_path.header.frame_id = 'map'
         self.last_trail_xy = None
 
-        # Stuck detection + recovery
-        self.last_progress_xy = None
-        self.last_progress_time = None
-        self.recovery_active = False
-        self.recovery_start_time = None
-        self.recovery_phase = 0  # 1 = reversing, 2 = turning
-        self.STUCK_DIST = 0.06       # metres — must move this far to count as progress
-        self.STUCK_TIMEOUT = 2.5    # seconds without progress → stuck
-        self.RECOVER_REVERSE_T = 0.3  # seconds of reverse
-        self.RECOVER_TURN_T = 0.4    # seconds of in-place turn after reversing
+        # LiDAR reactive avoidance
+        self.scan_ranges = None
+        self.scan_angle_min = 0.0
+        self.scan_angle_increment = 0.0
+        self.LIDAR_DANGER_DIST = 0.30   # metres — obstacle closer than this triggers avoidance
+        self.LIDAR_FRONT_HALF_ANGLE = 0.52  # radians (~30 deg each side of forward)
 
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
 
         self.get_logger().info(f'DiffDrivePID started: kp={self.k_p}, kd={self.k_d}, ki={self.k_i}, lookahead={self.length}, rate={self.publish_rate} Hz')
+
+    def scan_received(self, msg: LaserScan):
+        self.scan_ranges = np.array(msg.ranges, dtype=float)
+        self.scan_angle_min = msg.angle_min
+        self.scan_angle_increment = msg.angle_increment
+
+    def lidar_obstacle_ahead(self):
+        """Returns (blocked, turn_sign) where turn_sign=+1 means turn left, -1 means turn right."""
+        if self.scan_ranges is None:
+            return False, 0
+        r = self.scan_ranges
+        n = len(r)
+        angle_min = self.scan_angle_min
+        inc = self.scan_angle_increment
+        half = self.LIDAR_FRONT_HALF_ANGLE
+        danger = self.LIDAR_DANGER_DIST
+
+        # Split front sector into left half and right half
+        left_blocked = False
+        right_blocked = False
+        for i, dist in enumerate(r):
+            if not np.isfinite(dist) or dist <= 0.01:
+                continue
+            angle = angle_min + i * inc
+            if abs(angle) > half:
+                continue
+            if dist < danger:
+                if angle >= 0:
+                    left_blocked = True
+                else:
+                    right_blocked = True
+
+        blocked = left_blocked or right_blocked
+        if blocked:
+            # Turn away from the more blocked side
+            turn_sign = -1 if left_blocked else 1
+            if left_blocked and right_blocked:
+                turn_sign = -1  # default: turn right
+        else:
+            turn_sign = 0
+        return blocked, turn_sign
 
     def odom_received(self, msg):
         pose = msg.pose.pose.position
@@ -249,53 +288,12 @@ class DiffDrivePID(Node):
             if not self.has_odom:
                 return  # nothing yet
 
-        # ── Stuck detection ──────────────────────────────────────────
-        now_s = self.get_clock().now().nanoseconds * 1e-9
-        cur_xy = (self.robot_state[0], self.robot_state[1])
-
-        if self.has_goal:
-            if self.last_progress_xy is None:
-                self.last_progress_xy = cur_xy
-                self.last_progress_time = now_s
-            elif np.linalg.norm(np.array(cur_xy) - np.array(self.last_progress_xy)) > self.STUCK_DIST:
-                self.last_progress_xy = cur_xy
-                self.last_progress_time = now_s
-                self.recovery_active = False
-            elif (not self.recovery_active and
-                  (now_s - self.last_progress_time) > self.STUCK_TIMEOUT):
-                self.recovery_active = True
-                self.recovery_start_time = now_s
-                self.recovery_phase = 1
-                self.get_logger().warn('Stuck! Reversing to escape wall.')
-        else:
-            self.last_progress_xy = None
-            self.last_progress_time = None
-            self.recovery_active = False
-
-        # ── Recovery override ────────────────────────────────────────
-        if self.recovery_active:
-            elapsed = now_s - self.recovery_start_time
-            if self.recovery_phase == 1:
-                if elapsed < self.RECOVER_REVERSE_T:
-                    desired_vel = np.array([-0.5, 0.0])
-                else:
-                    self.recovery_phase = 2
-                    self.recovery_start_time = now_s
-                    desired_vel = np.array([0.0, 0.0])
-            if self.recovery_phase == 2:
-                elapsed = now_s - self.recovery_start_time
-                if elapsed < self.RECOVER_TURN_T:
-                    # Turn toward goal direction
-                    dx = self.desired_goal[0] - self.robot_state[0]
-                    dy = self.desired_goal[1] - self.robot_state[1]
-                    goal_angle = np.arctan2(dy, dx)
-                    herr = normalize_angle(goal_angle - self.robot_state[2])
-                    desired_vel = np.array([0.0, float(np.sign(herr)) * self.max_angular_vel * 0.5])
-                else:
-                    self.recovery_active = False
-                    self.last_progress_xy = cur_xy
-                    self.last_progress_time = now_s
-                    desired_vel = self.compute_vel()
+        # ── LiDAR reactive avoidance ───────────────────────────────────────────
+        # If the LiDAR sees an obstacle closer than LIDAR_DANGER_DIST directly
+        # ahead, override normal control: stop forward motion and turn away.
+        blocked, turn_sign = self.lidar_obstacle_ahead()
+        if blocked and self.has_goal:
+            desired_vel = np.array([0.0, turn_sign * self.max_angular_vel * 0.6])
         else:
             desired_vel = self.compute_vel()
 
