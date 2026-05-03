@@ -231,7 +231,28 @@ The robot first picks up goal_1 immediately north of its spawn — a short strai
 *(screenshot: RViz Maze_ng)*
 
 ---
-> **Note:** Screenshots for Maze_hr to be added.
+
+### Maze_hr
+
+**Layout:** 8.99 × 8.43 m arena. This maze is defined almost entirely by diagonal walls, making it visually and geometrically the most distinctive of the four. The boundary is a closed rectangle formed by four long axis-aligned outer walls. The interior contains five large diagonal walls — two near-vertical ones on the left (~75° from horizontal, each 4 m long), two crossing diagonals in the center-upper area (~116°, 4–5 m long), and one shallow diagonal in the lower center (~9° from horizontal, 4 m long). A small axis-aligned notch in the upper-right (two short walls forming a step) rounds out the interior. The diagonal walls create large open triangular pockets rather than corridors, and the challenges come from navigating around the pointed ends of each diagonal slab.
+
+**Spawn:** (−1.83, −1.31), facing yaw = 0.1 rad (~6°), lower-left interior area between the outer-left wall and the lower diagonal.
+
+**Goals (nearest-first from spawn):**
+1. goal_3 at (0.55, −0.25) — center-lower area, across the lower diagonal wall
+2. goal_2 at (−3.82, 0.7) — far left, tucked against the outer-left wall behind the two near-vertical diagonals
+3. goal_1 at (−0.4, 3.65) — upper center, above the two crossing diagonals and near the small notch
+
+**Navigation path:**
+The robot starts lower-left and first heads across the lower-center area to reach goal_3 — a relatively short route that must avoid the tip of the shallow lower diagonal. It then travels west and north to goal_2, which sits in the narrow pocket between the outer-left wall and the two steep near-vertical diagonals. Finally it crosses back east and north, threading between the two large crossing diagonals in the upper half to reach goal_1. As visible in RViz, the trail is a loop from lower-left, east to goal_3, back west to goal_2, then north to goal_1. The five diagonal walls require the map to be rendered with rotation angles so A* plans routes around their actual endpoints rather than their axis-aligned bounding boxes.
+
+*Gazebo Sim — Maze_hr showing the distinctive all-diagonal interior wall layout; robot visible lower-center:*
+*(screenshot: Gazebo Maze_hr)*
+
+*RViz — occupancy grid with rendered diagonal walls; pink trail and red LiDAR scan visible navigating the upper-left section toward goal_1:*
+*(screenshot: RViz Maze_hr)*
+
+---
 
 ## Overview
 
