@@ -223,11 +223,11 @@ class DiffDrivePID(Node):
             return np.array([0.0, 0.0])
 
         # ── Immediate wall-hit reversal ────────────────────────────────────────
-        # Arc narrowed to ±45°: inner-corner walls sit at ~±45-60° after a 90° turn
-        # and were triggering reverse with the old ±60° arc.  ±45° catches genuine
-        # forward approaches (7 rays) without firing on exited-corner walls.
+        # Arc narrowed to ±30°: inner-corner walls sit at ~±30-45° after a 90° turn
+        # and were triggering reverse with the old ±45° arc.  ±30° (3 rays) only
+        # catches genuine head-on approaches, not exited-corner walls.
         # Suppressed during pure-rotation (robot can't close on a wall while spinning).
-        # Post-rotation grace (0.2 s): gives the robot time to accelerate away from
+        # Post-rotation grace (0.4 s): gives the robot time to accelerate away from
         # the corner before the reverse check re-enables.  Prevents the oscillation
         # loop where reverse fires the instant the spin completes.
         goal_angle_pre = np.arctan2(dy, dx)
@@ -237,7 +237,7 @@ class DiffDrivePID(Node):
         _now_t = time.monotonic()
         if self._prev_rotating and not currently_rotating:
             # Just finished a spin — start grace window.
-            self._grace_until = _now_t + 0.2
+            self._grace_until = _now_t + 0.4
         self._prev_rotating = currently_rotating
         _in_grace = _now_t < self._grace_until
 
@@ -246,7 +246,7 @@ class DiffDrivePID(Node):
             fwd_min = 30.0
             for i in range(n_w):
                 ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
-                if abs(ray_a) < 0.785:  # ±45°
+                if abs(ray_a) < 0.524:  # ±30°
                     r = float(self._lidar_ranges[i])
                     if np.isfinite(r) and r > 0.01:  # include blind-zone reads
                         fwd_min = min(fwd_min, r)
