@@ -394,10 +394,9 @@ class DiffDrivePID(Node):
                         if score > best_score:
                             best_score = score
                             best_center = center_angle
-                    # Blend 50/50: equal weight to gap avoidance and goal direction.
-                    # Prevents the 80/20 blend from landing just above the rotate-
-                    # threshold and causing constant stop–spin oscillation.
-                    blended = 0.50 * best_center + 0.50 * heading_to_goal
+                    # Blend 40/60: weight goal direction more heavily so the robot
+                    # stays oriented toward the target when the path is mostly clear.
+                    blended = 0.40 * best_center + 0.60 * heading_to_goal
                     steer = normalize_angle(blended)
 
         # ── Heading and velocity control ────────────────────────────────────
