@@ -120,6 +120,8 @@ class DiffDrivePID(Node):
         self._reverse_until_clear = False  # immediate escape: back up until forward is open
         self._recovery_total = int(1.5 * self.publish_rate)  # 1.5 s total recovery
         self._recovery_back_frames = int(0.5 * self.publish_rate)  # first 0.5 s: back up straight
+        self._prev_rotating = False          # tracks rotation→forward transition
+        self._grace_until = 0.0              # monotonic time until post-rotation grace ends
 
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
@@ -222,21 +224,31 @@ class DiffDrivePID(Node):
 
         # ── Immediate wall-hit reversal ────────────────────────────────────────
         # Trigger at 0.30 m — genuine imminent contact WHILE DRIVING FORWARD.
-        # Suppressed during pure-rotation: if the robot is only spinning it cannot
-        # get closer to the wall, so a nearby forward reading is the wall it is
-        # already beside — not a new collision risk.  Firing reverse here is what
-        # prevents 90° turns from completing (spin gets interrupted every time
-        # the wall sweeps through the forward arc).
+        # Two layers of protection so 90° turns are never interrupted:
+        #  1. Suppressed during pure-rotation (robot can't get closer when not moving fwd).
+        #  2. Suppressed for 0.4 s after a rotation completes (post-rotation grace period)
+        #     so the corner wall that was at ±45° during the spin doesn't immediately
+        #     re-trigger reverse as the robot starts moving into the new corridor.
+        # Arc narrowed to ±30°: inner-corner walls sit at ~±45° and are NOT in the
+        # actual driving path — only a wall the robot is heading straight into fires this.
         goal_angle_pre = np.arctan2(dy, dx)
         heading_pre = normalize_angle(goal_angle_pre - th_r)
         currently_rotating = abs(heading_pre) > self.heading_rotate_threshold
 
-        if not currently_rotating and self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
+        # Detect transition from rotating → forward and start grace period.
+        _now_grace = time.monotonic()
+        if self._prev_rotating and not currently_rotating:
+            self._grace_until = _now_grace + 0.4  # 0.4 s grace after spin completes
+        self._prev_rotating = currently_rotating
+
+        _in_grace = _now_grace < self._grace_until
+
+        if not currently_rotating and not _in_grace and self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
             n_w = len(self._lidar_ranges)
             fwd_min = 30.0
             for i in range(n_w):
                 ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
-                if abs(ray_a) < 1.047:  # ±60° forward
+                if abs(ray_a) < 0.524:  # ±30° — tight cone, ignores corner walls at ±45°
                     r = float(self._lidar_ranges[i])
                     if np.isfinite(r) and r > 0.01:  # include blind-zone reads
                         fwd_min = min(fwd_min, r)
@@ -256,9 +268,9 @@ class DiffDrivePID(Node):
                         self.k_p * 3.0 * err_rev,
                         -self.max_angular_vel, self.max_angular_vel))
                     return np.array([-0.3, az_rev])
-        elif currently_rotating:
-            # Clear reverse flag when we enter a rotation phase — a stale flag
-            # from a previous forward move would otherwise fire immediately.
+        elif currently_rotating or _in_grace:
+            # Clear reverse flag when spinning or in grace — stale flag from a
+            # previous forward move must not fire the moment forward motion resumes.
             self._reverse_until_clear = False
 
         # ── Stuck recovery ──────────────────────────────────────────────────

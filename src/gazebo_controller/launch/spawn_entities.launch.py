@@ -101,18 +101,13 @@ def generate_launch_description():
             output='screen'
         )
 
-        # Static transform publishers
-        # map → odom encodes the robot's spawn pose so that map → odom → base_link
-        # gives true world coordinates. Without this, odom starts at (0,0,0) and all
-        # A* waypoints (which are in world/map coords) are in the wrong frame.
+        # Static transform: map → odom as identity.
+        # The planner uses ground-truth pose from maze_world (aliased to map),
+        # so odom must equal map to avoid confusing RViz displays.
         static_tf = Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=[
-                robot_pose['x'], robot_pose['y'], '0',
-                robot_pose['yaw'], '0', '0',
-                'map', 'odom'
-            ],
+            arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom'],
             output='screen'
         )
         
