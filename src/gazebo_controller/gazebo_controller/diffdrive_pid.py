@@ -220,10 +220,9 @@ class DiffDrivePID(Node):
             return np.array([0.0, 0.0])
 
         # ── Immediate wall-hit reversal ────────────────────────────────────────
-        # If the minimum valid forward reading (above self-filter 0.28 m) is
-        # within 0.35 m the robot is dangerously close to a wall — back up
-        # until the full forward arc clears 0.50 m before resuming.
-        # NOTE: trigger must be > 0.28 (self-filter) so it can actually fire.
+        # Trigger at 0.30 m (just above self-filter 0.28 m) — genuine imminent
+        # contact only, NOT normal corridor driving.  Gap nav handles 0.30–0.38 m.
+        # Exit when full forward arc > 0.50 m.
         if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
             n_w = len(self._lidar_ranges)
             fwd_min = 30.0
@@ -233,7 +232,7 @@ class DiffDrivePID(Node):
                     r = float(self._lidar_ranges[i])
                     if np.isfinite(r) and r > 0.28:
                         fwd_min = min(fwd_min, r)
-            if fwd_min < 0.35:
+            if fwd_min < 0.30:
                 self._reverse_until_clear = True
             if self._reverse_until_clear:
                 if fwd_min > 0.50:
@@ -334,11 +333,12 @@ class DiffDrivePID(Node):
                 30.0
             )
 
-            # When struggling > 5 s: lower clearance bar and widen cone so the
-            # robot "sees" tight or diagonal paths it was previously ignoring.
-            # Normal MIN_CLEAR = 0.35 so gap nav only fires near real wall contact,
-            # not constantly in every corridor — trust A* waypoints by default.
-            MIN_CLEAR = 0.28 if struggling else 0.35
+            # Gap nav threshold deliberately higher than reverse_until_clear (0.30 m)
+            # so the two systems operate in separate distance bands:
+            #   0.28–0.30 m → reverse_until_clear (emergency escape)
+            #   0.30–0.38 m → gap nav steers around obstacle
+            #   > 0.38 m    → pure A* waypoint tracking
+            MIN_CLEAR = 0.30 if struggling else 0.38
             blocked_cone = 1.047 if struggling else 0.785  # ±60° escalated, ±45° normal
             open_mask = rng > MIN_CLEAR
 

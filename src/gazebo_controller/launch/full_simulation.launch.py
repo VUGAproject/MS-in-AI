@@ -47,13 +47,13 @@ def generate_launch_description():
             'max_linear_vel': 1.8,
             'max_angular_vel': 2.6,
             'goal_tolerance': 0.30,
-            'heading_rotate_threshold': 1.20,
+            'heading_rotate_threshold': 1.00,
             'heading_slowdown_threshold': 0.45,
             'min_turn_speed_scale': 0.35,
         }
         planner_params = {
             'goal_reach_tolerance': 0.40,
-            'waypoint_stride_cells': 6,
+            'waypoint_stride_cells': 3,
             'obstacle_inflation_cells': 2,
         }
 
@@ -83,11 +83,11 @@ def generate_launch_description():
                 'max_linear_vel': 1.45,
                 'max_angular_vel': 2.8,
                 'lookahead': 0.55,
-                'heading_rotate_threshold': 1.10,
+                'heading_rotate_threshold': 1.00,
                 'goal_tolerance': 0.28,
             })
             planner_params.update({
-                'waypoint_stride_cells': 4,
+                'waypoint_stride_cells': 3,
                 'obstacle_inflation_cells': 3,
             })
         elif maze_folder == 'Maze_hr':
@@ -95,23 +95,24 @@ def generate_launch_description():
                 'max_linear_vel': 1.80,
                 'max_angular_vel': 2.7,
                 'lookahead': 0.60,
-                'heading_rotate_threshold': 1.20,
+                'heading_rotate_threshold': 1.00,
             })
             planner_params.update({
-                'waypoint_stride_cells': 6,
+                'waypoint_stride_cells': 3,
                 'obstacle_inflation_cells': 2,
             })
         elif maze_folder == 'Maze_ql_1':
-            # More open sections: longest stride and highest linear speed.
+            # More open sections: higher speed but tighter stride so first waypoint
+            # after a turn is already in the correct direction.
             pid_params.update({
                 'max_linear_vel': 2.10,
                 'max_angular_vel': 2.5,
                 'lookahead': 0.65,
-                'heading_rotate_threshold': 1.30,
+                'heading_rotate_threshold': 1.00,
                 'goal_tolerance': 0.33,
             })
             planner_params.update({
-                'waypoint_stride_cells': 8,
+                'waypoint_stride_cells': 4,
                 'obstacle_inflation_cells': 2,
                 'goal_reach_tolerance': 0.45,
             })
