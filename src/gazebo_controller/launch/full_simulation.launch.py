@@ -100,7 +100,7 @@ def generate_launch_description():
             planner_params.update({
                 'waypoint_stride_cells': 6,
                 'obstacle_inflation_cells': 3,
-                'force_goal_order': '2,0,1',
+                'force_goal_order': '1,2,0',
             })
         elif maze_folder == 'Maze_ql_1':
             # More open sections but tight corners near goal_3: stride=4 keeps
