@@ -102,20 +102,10 @@ def generate_launch_description():
         )
 
         # Static transform publishers
-        # map → odom encodes the robot's spawn pose so that map → odom → base_link
-        # gives true world coordinates. Without this, odom starts at (0,0,0) and all
-        # A* waypoints (which are in world/map coords) are in the wrong frame.
-        static_tf = Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            arguments=[
-                robot_pose['x'], robot_pose['y'], '0',
-                robot_pose['yaw'], '0', '0',
-                'map', 'odom'
-            ],
-            output='screen'
-        )
-        
+        # map → maze_world: identity so that A* (which uses 'map' frame) and
+        # Gazebo ground-truth poses (published in 'maze_world') share the same
+        # origin. No map→odom offset needed — planner reads ground truth
+        # directly from /model/vehicle_blue/pose, not from odometry.
         maze_world_tf = Node(
             package='tf2_ros',
             executable='static_transform_publisher',
@@ -158,7 +148,6 @@ def generate_launch_description():
             spawn_goal1,
             spawn_goal2,
             spawn_goal3,
-            static_tf,
             maze_world_tf,
             lidar_tf,
             map_publisher,
