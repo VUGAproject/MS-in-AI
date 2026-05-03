@@ -5,6 +5,8 @@ Publishes an OccupancyGrid representation of the maze world for navigation and d
 Loads map definition from YAML file specific to each maze.
 """
 
+import math
+
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid
@@ -76,18 +78,50 @@ class MapPublisher(Node):
     
     def create_maze_map(self):
         """Create the occupancy grid based on wall definitions from YAML"""
-        # Initialize grid as free space (0 = free, 100 = occupied, -1 = unknown)
         grid = np.zeros((self.grid_height, self.grid_width), dtype=np.int8)
         
-        # Fill in walls from YAML configuration
         for wall in self.walls:
-            cx, cy, sx, sy = wall
-            self.fill_rectangle(grid, cx, cy, sx, sy, 100)
+            cx, cy, sx, sy = wall[0], wall[1], wall[2], wall[3]
+            rotation = float(wall[4]) if len(wall) > 4 else 0.0
+            # Axis-aligned: rotation ≈ 0, ±π
+            if abs(rotation) < 0.01 or abs(abs(rotation) - math.pi) < 0.01:
+                self.fill_rectangle(grid, cx, cy, sx, sy, 100)
+            # 90° rotated: swap dimensions
+            elif abs(abs(rotation) - math.pi / 2) < 0.01:
+                self.fill_rectangle(grid, cx, cy, sy, sx, 100)
+            else:
+                self.fill_rotated_rectangle(grid, cx, cy, sx, sy, rotation, 100)
         
         return grid
     
+    def fill_rotated_rectangle(self, grid, center_x, center_y, size_x, size_y, rotation, value):
+        """Fill a rotated rectangle into the grid by rasterising in the wall's local frame."""
+        h, w = grid.shape
+        cos_t = math.cos(rotation)
+        sin_t = math.sin(rotation)
+        half_x = size_x / 2.0
+        half_y = size_y / 2.0
+        # Compute axis-aligned bounding box of the rotated rectangle
+        bb_hx = half_x * abs(cos_t) + half_y * abs(sin_t)
+        bb_hy = half_x * abs(sin_t) + half_y * abs(cos_t)
+        min_col = max(0, int((center_x - bb_hx - self.origin_x) / self.resolution))
+        max_col = min(w - 1, int((center_x + bb_hx - self.origin_x) / self.resolution) + 1)
+        min_row = max(0, int((center_y - bb_hy - self.origin_y) / self.resolution))
+        max_row = min(h - 1, int((center_y + bb_hy - self.origin_y) / self.resolution) + 1)
+        for row in range(min_row, max_row + 1):
+            for col in range(min_col, max_col + 1):
+                wx = self.origin_x + (col + 0.5) * self.resolution
+                wy = self.origin_y + (row + 0.5) * self.resolution
+                dx = wx - center_x
+                dy = wy - center_y
+                # Rotate to wall-local frame
+                lx = dx * cos_t + dy * sin_t
+                ly = -dx * sin_t + dy * cos_t
+                if abs(lx) <= half_x and abs(ly) <= half_y:
+                    grid[row, col] = value
+
     def fill_rectangle(self, grid, center_x, center_y, size_x, size_y, value):
-        """Fill a rectangle in the grid with the given value"""
+        """Fill an axis-aligned rectangle in the grid with the given value."""
         # Calculate bounds in world coordinates
         min_x = center_x - size_x / 2.0
         max_x = center_x + size_x / 2.0
