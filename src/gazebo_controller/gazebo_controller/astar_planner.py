@@ -259,7 +259,9 @@ class AStarPlanner(Node):
         grid = self.occ_grid
         h, w = grid.shape
         # Weight for wall-proximity penalty: higher = paths hug corridor centres more.
-        WALL_WEIGHT = 0.5
+        # Keep small so the penalty nudges A* toward centres without dominating step cost
+        # in narrow corridors (which would slow planning and force unreachable waypoints).
+        WALL_WEIGHT = 0.1
 
         if grid[start[0], start[1]] >= 50 or grid[goal[0], goal[1]] >= 50:
             return []
@@ -302,7 +304,8 @@ class AStarPlanner(Node):
                 nxt = (nr, nc)
                 # Wall-proximity penalty: cells near obstacles cost more so A*
                 # naturally routes through corridor centres.
-                wall_penalty = (WALL_WEIGHT / (dist_map[nr, nc] + 0.01)
+                # Capped at 1.0 to prevent narrow corridors from exploding the cost space.
+                wall_penalty = (min(WALL_WEIGHT / (dist_map[nr, nc] + 0.01), 1.0)
                                 if dist_map is not None else 0.0)
                 tentative = g_score[current] + move_cost + wall_penalty
                 if tentative < g_score.get(nxt, float('inf')):
