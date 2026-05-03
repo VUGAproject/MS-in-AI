@@ -29,8 +29,11 @@ def generate_launch_description():
         maze_from_map_folder = context.perform_substitution(LaunchConfiguration('map_folder'))
         maze_folder = maze_alias if maze_alias else maze_from_map_folder
         
-        # Vehicle model SDF file
+        # Vehicle model SDF file (for Gazebo spawning)
         vehicle_model_file = os.path.join(pkg_share, 'sdf', 'vehicle_blue_model.sdf')
+
+        # URDF file (for robot_state_publisher / RViz model)
+        urdf_file = os.path.join(pkg_share, 'urdf', 'vehicle_blue.urdf')
 
         # Goal sphere SDF file
         goal_sphere_file = os.path.join(pkg_share, 'sdf', 'goal_sphere.sdf')
@@ -131,13 +134,14 @@ def generate_launch_description():
         )
 
         # Robot state publisher
+        robot_description = open(urdf_file, 'r').read() if os.path.exists(urdf_file) else open(vehicle_model_file, 'r').read()
         robot_state_publisher = Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',
             name='robot_state_publisher',
             output='screen',
             parameters=[{
-                'robot_description': open(vehicle_model_file, 'r').read()
+                'robot_description': robot_description
             }]
         )
 

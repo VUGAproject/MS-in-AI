@@ -18,6 +18,7 @@ setup(
         ('share/' + package_name + '/sdf/Maze_hr', glob('sdf/Maze_hr/*')),
         ('share/' + package_name + '/sdf/Maze_ql_1', glob('sdf/Maze_ql_1/*')),
         ('share/' + package_name + '/sdf/Maze_ng', glob('sdf/Maze_ng/*')),
+        ('share/' + package_name + '/urdf', glob('urdf/*')),
         ('share/' + package_name + '/rviz', glob('rviz/*.rviz')),
     ],
     install_requires=['setuptools'],
