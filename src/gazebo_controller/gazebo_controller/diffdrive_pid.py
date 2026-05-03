@@ -223,6 +223,9 @@ class DiffDrivePID(Node):
         # Trigger at 0.30 m (just above self-filter 0.28 m) — genuine imminent
         # contact only, NOT normal corridor driving.  Gap nav handles 0.30–0.38 m.
         # Exit when full forward arc > 0.50 m.
+        # NOTE: accept ALL finite readings > 0.01 m in forward sector, including
+        # those < 0.28 m (the self-filter blind zone).  In the ±60° forward arc
+        # the robot body cannot appear, so any close reading is a real wall.
         if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
             n_w = len(self._lidar_ranges)
             fwd_min = 30.0
@@ -230,7 +233,7 @@ class DiffDrivePID(Node):
                 ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
                 if abs(ray_a) < 1.047:  # ±60° forward
                     r = float(self._lidar_ranges[i])
-                    if np.isfinite(r) and r > 0.28:
+                    if np.isfinite(r) and r > 0.01:  # include blind-zone reads
                         fwd_min = min(fwd_min, r)
             if fwd_min < 0.30:
                 self._reverse_until_clear = True
@@ -326,9 +329,15 @@ class DiffDrivePID(Node):
 
         if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
             n = len(self._lidar_ranges)
-            # Blanket self-filter: suppress anything < 0.28 m (own chassis/wheels)
+            # Directional self-filter: robot body appears in LiDAR only at
+            # side/rear angles (|ray| >= ±60°). In the forward ±60° sector the
+            # LiDAR protrudes past the robot chassis so no body reflections occur
+            # — use a near-0 threshold there so real close walls stay visible.
+            _ray_angles = (self._lidar_angle_min +
+                           np.arange(len(self._lidar_ranges)) * self._lidar_angle_inc)
+            _sf_thresh = np.where(np.abs(_ray_angles) < 1.047, 0.01, 0.28)
             rng = np.where(
-                np.isfinite(self._lidar_ranges) & (self._lidar_ranges > 0.28),
+                np.isfinite(self._lidar_ranges) & (self._lidar_ranges > _sf_thresh),
                 self._lidar_ranges,
                 30.0
             )
