@@ -4,6 +4,7 @@ import math
 from typing import List, Optional, Tuple
 
 import numpy as np
+from scipy.ndimage import distance_transform_edt
 import rclpy
 import tf2_ros
 from geometry_msgs.msg import PoseStamped
@@ -37,6 +38,7 @@ class AStarPlanner(Node):
 
         self.map_msg: Optional[OccupancyGrid] = None
         self.occ_grid: Optional[np.ndarray] = None
+        self.dist_map: Optional[np.ndarray] = None  # metres to nearest obstacle, per free cell
         self.robot_map_xy: Optional[Tuple[float, float]] = None
         self.all_goals: List[Tuple[float, float]] = []
         self.remaining_goals: List[Tuple[float, float]] = []
@@ -87,6 +89,10 @@ class AStarPlanner(Node):
             return
         grid = np.array(msg.data, dtype=np.int16).reshape((h, w))
         self.occ_grid = self.inflate_obstacles(grid, self.obstacle_inflation_cells)
+        # Distance transform: for every free cell, compute metres to nearest obstacle.
+        # Used by A* to penalise paths that pass close to walls.
+        free_mask = (self.occ_grid < 50)
+        self.dist_map = distance_transform_edt(free_mask) * float(msg.info.resolution)
 
     def true_pose_cb(self, msg: TFMessage):
         """Ground-truth world position. Uses maze_world→vehicle_blue transform."""
@@ -171,7 +177,7 @@ class AStarPlanner(Node):
             self.failed_goals.add(next_goal)
             return
 
-        path_rc = self.a_star(start_rc, goal_rc)
+        path_rc = self.a_star(start_rc, goal_rc, self.dist_map)
         if not path_rc:
             self.get_logger().warn(f'No path found to goal {next_goal}; trying others')
             self.failed_goals.add(next_goal)
@@ -247,10 +253,13 @@ class AStarPlanner(Node):
             sampled.append(path_rc[-1])
         return [self.grid_to_world(r, c) for r, c in sampled]
 
-    def a_star(self, start: Tuple[int, int], goal: Tuple[int, int]) -> List[Tuple[int, int]]:
+    def a_star(self, start: Tuple[int, int], goal: Tuple[int, int],
+               dist_map: Optional[np.ndarray] = None) -> List[Tuple[int, int]]:
         assert self.occ_grid is not None
         grid = self.occ_grid
         h, w = grid.shape
+        # Weight for wall-proximity penalty: higher = paths hug corridor centres more.
+        WALL_WEIGHT = 0.5
 
         if grid[start[0], start[1]] >= 50 or grid[goal[0], goal[1]] >= 50:
             return []
@@ -291,7 +300,11 @@ class AStarPlanner(Node):
                         continue
 
                 nxt = (nr, nc)
-                tentative = g_score[current] + move_cost
+                # Wall-proximity penalty: cells near obstacles cost more so A*
+                # naturally routes through corridor centres.
+                wall_penalty = (WALL_WEIGHT / (dist_map[nr, nc] + 0.01)
+                                if dist_map is not None else 0.0)
+                tentative = g_score[current] + move_cost + wall_penalty
                 if tentative < g_score.get(nxt, float('inf')):
                     came_from[nxt] = current
                     g_score[nxt] = tentative
