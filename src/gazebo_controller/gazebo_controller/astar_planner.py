@@ -135,6 +135,20 @@ class AStarPlanner(Node):
         if not self.remaining_goals and self.active_goal is None:
             return
 
+        # Proximity sweep: if the robot has passed within tolerance of any remaining
+        # goal that is NOT the currently active goal, mark it reached immediately.
+        # This handles cases where the robot bypasses a goal while wall-hugging or
+        # taking a wide arc that crosses the goal location.
+        for g in list(self.remaining_goals):
+            if g != self.active_goal and self.distance(self.robot_map_xy, g) <= self.goal_reach_tolerance:
+                self.remaining_goals.remove(g)
+                self.get_logger().info(
+                    f'Proximity sweep: passed goal {g}; auto-marked reached. '
+                    f'{len(self.remaining_goals)} goals left')
+
+        if not self.remaining_goals and self.active_goal is None:
+            return
+
         # If we currently follow waypoints, check progress and continue publishing.
         if self.pending_waypoints and self.active_waypoint_idx >= 0:
             wp = self.pending_waypoints[self.active_waypoint_idx]
@@ -261,7 +275,7 @@ class AStarPlanner(Node):
         # Weight for wall-proximity penalty: higher = paths hug corridor centres more.
         # Keep small so the penalty nudges A* toward centres without dominating step cost
         # in narrow corridors (which would slow planning and force unreachable waypoints).
-        WALL_WEIGHT = 0.1
+        WALL_WEIGHT = 0.25
 
         if grid[start[0], start[1]] >= 50 or grid[goal[0], goal[1]] >= 50:
             return []

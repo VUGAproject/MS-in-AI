@@ -348,7 +348,7 @@ class DiffDrivePID(Node):
             #   0.30–0.38 m → gap nav steers around obstacle
             #   > 0.38 m    → pure A* waypoint tracking
             MIN_CLEAR = 0.30 if struggling else 0.38
-            blocked_cone = 1.047 if struggling else 0.785  # ±60° escalated, ±45° normal
+            blocked_cone = 1.047 if struggling else 0.524  # ±60° escalated, ±30° normal
             open_mask = rng > MIN_CLEAR
 
             # Check whether the direct path to goal is blocked
