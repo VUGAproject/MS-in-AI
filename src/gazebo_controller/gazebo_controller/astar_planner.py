@@ -137,17 +137,6 @@ class AStarPlanner(Node):
         if not self.remaining_goals and self.active_goal is None:
             return
 
-        # Proximity sweep: if the robot has passed within tolerance of any remaining
-        # goal that is NOT the currently active goal, mark it reached immediately.
-        # This handles cases where the robot bypasses a goal while wall-hugging or
-        # taking a wide arc that crosses the goal location.
-        for g in list(self.remaining_goals):
-            if g != self.active_goal and self.distance(self.robot_map_xy, g) <= self.goal_reach_tolerance:
-                self.remaining_goals.remove(g)
-                self.get_logger().info(
-                    f'Proximity sweep: passed goal {g}; auto-marked reached. '
-                    f'{len(self.remaining_goals)} goals left')
-
         if not self.remaining_goals and self.active_goal is None:
             return
 
