@@ -221,12 +221,10 @@ class DiffDrivePID(Node):
             return np.array([0.0, 0.0])
 
         # ── Immediate wall-hit reversal ────────────────────────────────────────
-        # Trigger at 0.30 m (just above self-filter 0.28 m) — genuine imminent
-        # contact only, NOT normal corridor driving.  Gap nav handles 0.30–0.38 m.
+        # Trigger at 0.30 m — genuine imminent contact.
         # Exit when full forward arc > 0.50 m.
-        # NOTE: accept ALL finite readings > 0.01 m in forward sector, including
-        # those < 0.28 m (the self-filter blind zone).  In the ±60° forward arc
-        # the robot body cannot appear, so any close reading is a real wall.
+        # While reversing, also spin toward the goal so the robot escapes
+        # sideways and is already oriented for the next forward move.
         if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
             n_w = len(self._lidar_ranges)
             fwd_min = 30.0
@@ -242,7 +240,16 @@ class DiffDrivePID(Node):
                 if fwd_min > 0.50:
                     self._reverse_until_clear = False  # enough space — resume
                 else:
-                    return np.array([-0.3, 0.0])  # keep reversing
+                    # Spin toward goal while reversing so we exit facing the
+                    # right direction instead of backing straight into the same wall.
+                    goal_angle_rev = np.arctan2(
+                        self.desired_goal[1] - y_r,
+                        self.desired_goal[0] - x_r)
+                    err_rev = normalize_angle(goal_angle_rev - th_r)
+                    az_rev = float(np.clip(
+                        self.k_p * 3.0 * err_rev,
+                        -self.max_angular_vel, self.max_angular_vel))
+                    return np.array([-0.3, az_rev])
 
         # ── Stuck recovery ──────────────────────────────────────────────────
         if self._recovering:
