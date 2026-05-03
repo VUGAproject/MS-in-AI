@@ -46,13 +46,13 @@ def generate_launch_description():
             'publish_rate': 40.0,
             'max_linear_vel': 1.8,
             'max_angular_vel': 2.6,
-            'goal_tolerance': 0.30,
+            'goal_tolerance': 0.45,
             'heading_rotate_threshold': 1.20,
             'heading_slowdown_threshold': 0.45,
             'min_turn_speed_scale': 0.35,
         }
         planner_params = {
-            'goal_reach_tolerance': 0.40,
+            'goal_reach_tolerance': 0.50,
             'waypoint_stride_cells': 6,
             'obstacle_inflation_cells': 2,
         }
@@ -65,14 +65,14 @@ def generate_launch_description():
                 'publish_rate': 35.0,
                 'max_linear_vel': 1.15,
                 'max_angular_vel': 2.2,
-                'goal_tolerance': 0.22,
+                'goal_tolerance': 0.38,
                 'heading_rotate_threshold': 1.00,
                 'heading_slowdown_threshold': 0.35,
                 'min_turn_speed_scale': 0.25,
                 'base_frame': 'vehicle_blue/base_link',
             })
             planner_params.update({
-                'goal_reach_tolerance': 0.30,
+                'goal_reach_tolerance': 0.45,
                 'waypoint_stride_cells': 4,
                 'obstacle_inflation_cells': 3,
             })
@@ -84,7 +84,7 @@ def generate_launch_description():
                 'max_angular_vel': 2.8,
                 'lookahead': 0.55,
                 'heading_rotate_threshold': 1.10,
-                'goal_tolerance': 0.28,
+                'goal_tolerance': 0.45,
             })
             planner_params.update({
                 'waypoint_stride_cells': 4,
@@ -108,12 +108,12 @@ def generate_launch_description():
                 'max_angular_vel': 2.5,
                 'lookahead': 0.65,
                 'heading_rotate_threshold': 1.30,
-                'goal_tolerance': 0.33,
+                'goal_tolerance': 0.45,
             })
             planner_params.update({
                 'waypoint_stride_cells': 8,
                 'obstacle_inflation_cells': 2,
-                'goal_reach_tolerance': 0.45,
+                'goal_reach_tolerance': 0.55,
             })
 
         # Keep per-maze behavior but cap to safer limits under presentation profile.
