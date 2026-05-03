@@ -245,7 +245,6 @@ class AStarPlanner(Node):
             sampled = [path_rc[-1]]
         if sampled[-1] != path_rc[-1]:
             sampled.append(path_rc[-1])
-
         return [self.grid_to_world(r, c) for r, c in sampled]
 
     def a_star(self, start: Tuple[int, int], goal: Tuple[int, int]) -> List[Tuple[int, int]]:

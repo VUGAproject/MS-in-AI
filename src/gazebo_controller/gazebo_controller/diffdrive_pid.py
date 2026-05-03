@@ -5,6 +5,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
+from rclpy.duration import Duration
 
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, Path
@@ -95,7 +96,7 @@ class DiffDrivePID(Node):
         self.Xp_last = None
         self.has_goal = False
         self.has_odom = False
-        self._has_ground_truth = False  # True once Gazebo TF has been received
+        self._has_ground_truth = False
 
         self.trail_path = Path()
         self.trail_path.header.frame_id = 'map'
@@ -144,25 +145,29 @@ class DiffDrivePID(Node):
                 return
 
     def odom_received(self, msg):
-        # Fallback: use odometry to seed robot_state until the Gazebo ground-truth
-        # TF arrives.  Once true_pose_cb has fired at least once we stop updating
-        # from odometry so ground-truth remains the sole position source.
         if not self._has_ground_truth:
-            x = float(msg.pose.pose.position.x)
-            y = float(msg.pose.pose.position.y)
-            _, _, yaw = euler_from_quaternion(msg.pose.pose.orientation)
-            self.robot_state = np.array([x, y, yaw])
-        self.has_odom = True
+            q = msg.pose.pose.orientation
+            _, _, yaw = euler_from_quaternion(q)
+            self.robot_state = np.array([
+                msg.pose.pose.position.x,
+                msg.pose.pose.position.y,
+                yaw])
+            self.has_odom = True
 
     def goal_received(self, msg):
-        """Callback for goal pose messages."""
-        # The planner always publishes in 'map' frame, which is statically
-        # aligned to 'odom' and 'maze_world'.  Accept the x,y directly.
-        self.desired_goal = np.array([msg.pose.position.x, msg.pose.position.y])
-        self.get_logger().info(
-            f'Goal set to: [{self.desired_goal[0]:.3f}, {self.desired_goal[1]:.3f}]'
-            f' (frame: {msg.header.frame_id})')
+        """Callback for goal pose messages"""
+        # Check if goal is in the correct frame (odom)
+        goal_frame = msg.header.frame_id
 
+        # In this project launch, map and odom are intentionally aligned.
+        if goal_frame == 'map':
+            self.desired_goal = np.array([msg.pose.position.x, msg.pose.position.y])
+            self.get_logger().info(f'Goal set to: [{self.desired_goal[0]:.3f}, {self.desired_goal[1]:.3f}] using map=odom alignment')
+        else:
+            # Goal is already in odom frame (or no frame specified, assume odom)
+            self.desired_goal = np.array([msg.pose.position.x, msg.pose.position.y])
+            self.get_logger().info(f'Goal set to: [{self.desired_goal[0]:.3f}, {self.desired_goal[1]:.3f}] in odom frame')
+        
         # Reset the integral term when a new goal is set
         self.Xp_last = None
         self.has_goal = True
@@ -191,17 +196,17 @@ class DiffDrivePID(Node):
             return np.array([0.0, 0.0])
 
         # ── Immediate wall-hit reversal ────────────────────────────────────────
-        # If any forward ray (±60°) is closer than 0.22 m the robot is approaching
-        # a wall head-on.  Back up straight until the arc is clear (> 0.50 m).
-        # Reads below 0.28 m are filtered out as they may be chassis reflections.
+        # If any ray in the forward ±60° arc is closer than 0.22 m the robot is
+        # essentially touching a wall.  Back up until the whole forward arc is
+        # clear (> 0.50 m) before resuming normal navigation.
         if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
             n_w = len(self._lidar_ranges)
             fwd_min = 30.0
             for i in range(n_w):
                 ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
-                if abs(ray_a) < 1.047:  # ±60° forward arc
+                if abs(ray_a) < 1.047:  # ±60° forward
                     r = float(self._lidar_ranges[i])
-                    if np.isfinite(r) and r > 0.28:  # ignore near blind-zone reads
+                    if np.isfinite(r) and r > 0.28:
                         fwd_min = min(fwd_min, r)
             if fwd_min < 0.22:
                 self._reverse_until_clear = True
@@ -209,7 +214,7 @@ class DiffDrivePID(Node):
                 if fwd_min > 0.50:
                     self._reverse_until_clear = False  # enough space — resume
                 else:
-                    return np.array([-0.3, 0.0])  # back up straight
+                    return np.array([-0.3, 0.0])  # keep reversing
 
         # ── Stuck recovery ──────────────────────────────────────────────────
         if self._recovering:
@@ -280,13 +285,78 @@ class DiffDrivePID(Node):
                 self._stuck_count = 0          # real progress — reset counter
                 self._struggling_since = None  # made real progress, reset escalation
 
-        # ── Pure A* heading tracking ───────────────────────────────────────
-        # Gap nav removed. The robot follows A* waypoints directly.
-        # Emergency reverse (above) handles imminent wall contact.
-        # Stuck recovery (above) handles getting trapped.
+        # ── Track struggling (slow movement for > 5 s → widen perception) ────
+        speed_proxy = float(np.linalg.norm(cur_pos - (self._stuck_last_xy if self._stuck_last_xy is not None else cur_pos)))
+        if speed_proxy < 0.05:  # essentially stationary right now
+            if self._struggling_since is None:
+                self._struggling_since = time.monotonic()
+        else:
+            self._struggling_since = None
+        struggling = (self._struggling_since is not None and
+                      time.monotonic() - self._struggling_since > 5.0)
+
+        # ── LiDAR gap navigation ───────────────────────────────────────────
         goal_angle = np.arctan2(dy, dx)
-        heading_to_goal = normalize_angle(goal_angle - th_r)
+        heading_to_goal = normalize_angle(goal_angle - th_r)  # robot-frame angle to goal
         steer = heading_to_goal
+
+        if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
+            n = len(self._lidar_ranges)
+            # Blanket self-filter: suppress anything < 0.28 m (own chassis/wheels)
+            rng = np.where(
+                np.isfinite(self._lidar_ranges) & (self._lidar_ranges > 0.28),
+                self._lidar_ranges,
+                30.0
+            )
+
+            # When struggling > 5 s: lower clearance bar and widen cone so the
+            # robot "sees" tight or diagonal paths it was previously ignoring.
+            MIN_CLEAR = 0.35 if struggling else 0.55
+            blocked_cone = 1.047 if struggling else 0.785  # ±60° escalated, ±45° normal
+            open_mask = rng > MIN_CLEAR
+
+            # Check whether the direct path to goal is blocked
+            direct_blocked = any(
+                rng[i] < MIN_CLEAR
+                for i in range(n)
+                if abs(normalize_angle(
+                    (self._lidar_angle_min + i * self._lidar_angle_inc) - heading_to_goal
+                )) < blocked_cone
+            )
+
+            if direct_blocked:
+                # Find contiguous open-ray segments in the forward ±150° sector
+                segments = []
+                j = 0
+                while j < n:
+                    ray_a = self._lidar_angle_min + j * self._lidar_angle_inc
+                    if open_mask[j] and abs(ray_a) <= 2.618:
+                        start = j
+                        while j < n and open_mask[j] and abs(
+                                self._lidar_angle_min + j * self._lidar_angle_inc) <= 2.618:
+                            j += 1
+                        segments.append((start, j - 1))
+                    else:
+                        j += 1
+
+                if segments:
+                    # Pick the best segment and steer toward its CENTER,
+                    # then BLEND 60% gap-center + 40% goal to give a natural
+                    # margin — robot doesn't need to be perfectly centered.
+                    best_score = -1.0
+                    best_center = heading_to_goal
+                    for start, end in segments:
+                        mid_i = (start + end) / 2.0
+                        center_angle = self._lidar_angle_min + mid_i * self._lidar_angle_inc
+                        angular_dist = abs(normalize_angle(center_angle - heading_to_goal))
+                        gap_width = end - start + 1
+                        score = float(gap_width) * np.exp(-0.7 * angular_dist)
+                        if score > best_score:
+                            best_score = score
+                            best_center = center_angle
+                    # Blend: 95% gap center, 5% goal — strongly follow corridor geometry
+                    blended = 0.95 * best_center + 0.05 * heading_to_goal
+                    steer = normalize_angle(blended)
 
         # ── Heading and velocity control ────────────────────────────────────
         heading_err = float(normalize_angle(steer))
