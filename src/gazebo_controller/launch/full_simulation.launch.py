@@ -99,7 +99,7 @@ def generate_launch_description():
             })
             planner_params.update({
                 'waypoint_stride_cells': 6,
-                'obstacle_inflation_cells': 4,
+                'obstacle_inflation_cells': 3,
             })
         elif maze_folder == 'Maze_ql_1':
             # More open sections but tight corners near goal_3: stride=4 keeps
