@@ -156,6 +156,34 @@ ros2 launch gazebo_controller full_simulation.launch.py \
 
 ---
 
+## Per-Maze Navigation Behavior
+
+### basic_maze
+
+**Layout:** 9 × 9 m arena. Six outer wall segments form a closed rectangle with a 1.5 m gap at the top-center and bottom-center. Three horizontal inner walls divide the interior into stacked compartments:
+- Center wall — spans x = −2.25 m to +2.25 m at y = 0 m, with 1.5 m gaps on each side against the outer walls
+- Upper inner wall — spans x = −1.125 m to +1.125 m at y = 1.875 m
+- Lower inner wall — spans x = −1.125 m to +1.125 m at y = −1.875 m
+
+**Spawn:** (0, −3.0), facing up (yaw = 90°), in the bottom compartment.
+
+**Goals (nearest-first order):**
+1. goal_3 at (0, −0.75) — one compartment above spawn, between the lower inner wall and the center wall
+2. goal_2 at (0, 0.75) — center compartment, between the center wall and the upper inner wall
+3. goal_1 at (0, 2.76) — top compartment, above the upper inner wall
+
+**Navigation path:**
+The robot starts at the bottom of the maze and works upward through three stacked sections, navigating around the ends of each horizontal inner wall. All three inner walls are centered at x = 0, so the goals themselves are blocked by the walls — the robot cannot drive straight up. For each goal the planner routes the robot to one side of the blocking wall, passes around the open end, then turns back toward the center to reach the goal. As confirmed by the RViz trail below, the path is a series of lateral detours, one per wall.
+
+*Gazebo Sim — basic_maze with robot spawned at lower center:*
+*(screenshot: Gazebo basic_maze)*
+
+*RViz — occupancy grid and pink robot trail navigating upward through compartments:*
+*(screenshot: RViz basic_maze)*
+
+---
+> **Note:** Screenshots for Maze_ql_1, Maze_ng, and Maze_hr to be added.
+
 ## Overview
 
 This package provides a complete simulation environment for a differential drive robot navigating through various maze configurations. It includes:
