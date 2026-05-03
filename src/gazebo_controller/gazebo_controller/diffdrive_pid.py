@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import math
 import time
 import numpy as np
 
@@ -376,23 +377,27 @@ class DiffDrivePID(Node):
                         j += 1
 
                 if segments:
-                    # Pick the best segment and steer toward its CENTER,
-                    # then BLEND 60% gap-center + 40% goal to give a natural
-                    # margin — robot doesn't need to be perfectly centered.
+                    # Pick the best segment: use sqrt(width) to limit dominance of
+                    # wide-open areas, and a strong angular penalty (2.0) so the gap
+                    # most aligned with the goal direction wins over a wider side gap.
+                    # Require at least 3 rays (~30°) so a single-ray slit isn't chosen.
                     best_score = -1.0
                     best_center = heading_to_goal
                     for start, end in segments:
+                        gap_width = end - start + 1
+                        if gap_width < 3:  # skip navigably-too-narrow gaps
+                            continue
                         mid_i = (start + end) / 2.0
                         center_angle = self._lidar_angle_min + mid_i * self._lidar_angle_inc
                         angular_dist = abs(normalize_angle(center_angle - heading_to_goal))
-                        gap_width = end - start + 1
-                        score = float(gap_width) * np.exp(-0.7 * angular_dist)
+                        score = math.sqrt(float(gap_width)) * math.exp(-2.0 * angular_dist)
                         if score > best_score:
                             best_score = score
                             best_center = center_angle
-                    # Blend: 80% gap center, 20% goal — trust A* path more since
-                    # waypoints now route through corridor centres via distance map.
-                    blended = 0.80 * best_center + 0.20 * heading_to_goal
+                    # Blend 50/50: equal weight to gap avoidance and goal direction.
+                    # Prevents the 80/20 blend from landing just above the rotate-
+                    # threshold and causing constant stop–spin oscillation.
+                    blended = 0.50 * best_center + 0.50 * heading_to_goal
                     steer = normalize_angle(blended)
 
         # ── Heading and velocity control ────────────────────────────────────

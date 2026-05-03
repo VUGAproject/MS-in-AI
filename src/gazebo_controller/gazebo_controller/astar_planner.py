@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import heapq
 import math
+import time
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -47,6 +48,7 @@ class AStarPlanner(Node):
         self.active_goal: Optional[Tuple[float, float]] = None
         self.pending_waypoints: List[Tuple[float, float]] = []
         self.active_waypoint_idx = -1
+        self._last_replan_time: float = 0.0
 
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_cb, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_cb, 20)
@@ -152,7 +154,24 @@ class AStarPlanner(Node):
         # If we currently follow waypoints, check progress and continue publishing.
         if self.pending_waypoints and self.active_waypoint_idx >= 0:
             wp = self.pending_waypoints[self.active_waypoint_idx]
-            if self.distance(self.robot_map_xy, wp) <= self.goal_reach_tolerance:
+            dist_to_wp = self.distance(self.robot_map_xy, wp)
+
+            # Off-path detection: robot drifted too far from current waypoint.
+            # This happens after gap-nav maneuvers push the robot off the A* path
+            # and the remaining waypoints end up behind/beside the robot.
+            # Force a fresh replan to the same goal from the current position.
+            _now = time.monotonic()
+            if (dist_to_wp > 0.8
+                    and self.active_goal is not None
+                    and _now - self._last_replan_time > 2.0):
+                self.get_logger().warn(
+                    f'Off-path: {dist_to_wp:.2f} m from waypoint — replanning to {self.active_goal}')
+                self.pending_waypoints = []
+                self.active_waypoint_idx = -1
+                self._last_replan_time = _now
+                return
+
+            if dist_to_wp <= self.goal_reach_tolerance:
                 if self.active_waypoint_idx < len(self.pending_waypoints) - 1:
                     self.active_waypoint_idx += 1
                     self.publish_goal_pose(self.pending_waypoints[self.active_waypoint_idx])
