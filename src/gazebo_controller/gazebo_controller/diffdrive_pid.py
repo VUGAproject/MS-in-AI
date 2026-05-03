@@ -352,8 +352,16 @@ class DiffDrivePID(Node):
             blocked_cone = 1.047 if struggling else 0.524  # ±60° escalated, ±30° normal
             open_mask = rng > MIN_CLEAR
 
+            # "Goal in sight" bypass: if the LiDAR ray nearest to the goal direction
+            # reads > 0.6 m, the direct lane is clear — skip gap nav entirely and
+            # drive straight to the waypoint.  This avoids side-wall triggers in
+            # corridors and approach phases where nothing actually blocks the goal.
+            best_ray_idx = min(range(n), key=lambda i: abs(normalize_angle(
+                (self._lidar_angle_min + i * self._lidar_angle_inc) - heading_to_goal)))
+            goal_ray_clear = rng[best_ray_idx] > 0.60
+
             # Check whether the direct path to goal is blocked
-            direct_blocked = any(
+            direct_blocked = (not goal_ray_clear) and any(
                 rng[i] < MIN_CLEAR
                 for i in range(n)
                 if abs(normalize_angle(
