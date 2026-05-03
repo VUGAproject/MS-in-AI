@@ -378,8 +378,8 @@ class DiffDrivePID(Node):
                         if score > best_score:
                             best_score = score
                             best_center = center_angle
-                    # Blend: 95% gap center, 5% goal — strongly follow corridor geometry
-                    blended = 0.95 * best_center + 0.05 * heading_to_goal
+                    # Blend: 90% gap center, 10% goal — follow corridor geometry with stronger goal pull
+                    blended = 0.90 * best_center + 0.10 * heading_to_goal
                     steer = normalize_angle(blended)
 
         # ── Heading and velocity control ────────────────────────────────────
