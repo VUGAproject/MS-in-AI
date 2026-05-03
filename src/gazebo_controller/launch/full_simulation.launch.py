@@ -113,7 +113,7 @@ def generate_launch_description():
             })
             planner_params.update({
                 'waypoint_stride_cells': 4,
-                'obstacle_inflation_cells': 2,
+                'obstacle_inflation_cells': 3,
                 'goal_reach_tolerance': 0.45,
             })
 
