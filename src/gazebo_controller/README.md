@@ -209,7 +209,29 @@ The robot starts lower-right and immediately faces its most complex challenge: g
 *(screenshot: RViz Maze_ql_1)*
 
 ---
-> **Note:** Screenshots for Maze_ng and Maze_hr to be added.
+
+### Maze_ng
+
+**Layout:** 8.1 × 8.1 m arena. This is the densest maze — a true grid-style labyrinth with over 60 short wall segments forming a tightly interlocked corridor network. All walls are axis-aligned, each approximately 1 m long and 0.1 m thick, arranged in a regular cell pattern across the full arena. There are no large open sections; every path is a narrow 0.5–1 m wide corridor. The robot must navigate a long winding route to reach each goal.
+
+**Spawn:** (0.4, 0.0), facing yaw = 0.1 rad (~6°), lower-left area of the maze.
+
+**Goals (nearest-first from spawn):**
+1. goal_1 at (0.5, 1.2) — very close to spawn, one cell north
+2. goal_2 at (4.4, 0.0) — far right, same row as spawn but across the full width of the maze
+3. goal_3 at (2.5, 5.0) — upper center, requiring a long northward traverse through the corridor network
+
+**Navigation path:**
+The robot first picks up goal_1 immediately north of its spawn — a short straight move. It then needs to travel the full width of the maze eastward to reach goal_2 while navigating the dense grid of short wall segments, each requiring a turn. Finally it works its way north through multiple corridor segments to reach goal_3 in the upper center. As visible in the RViz trail, the path is a continuous S-shaped sweep: north to goal_1, then east across the bottom half to goal_2, then north again winding through the upper corridors to goal_3. This maze demands the most from stuck recovery and waypoint sequencing since nearly every move involves a 90° turn.
+
+*Gazebo Sim — Maze_ng showing the dense grid corridor layout with robot in the lower-left:*
+*(screenshot: Gazebo Maze_ng)*
+
+*RViz — occupancy grid of the full corridor network; pink trail shows the winding S-shaped path across goals 1, 2, and 3:*
+*(screenshot: RViz Maze_ng)*
+
+---
+> **Note:** Screenshots for Maze_hr to be added.
 
 ## Overview
 
