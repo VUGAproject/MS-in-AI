@@ -29,8 +29,11 @@ def generate_launch_description():
         maze_from_map_folder = context.perform_substitution(LaunchConfiguration('map_folder'))
         maze_folder = maze_alias if maze_alias else maze_from_map_folder
         
-        # Vehicle model SDF file
+        # Vehicle model SDF file (for Gazebo spawning)
         vehicle_model_file = os.path.join(pkg_share, 'sdf', 'vehicle_blue_model.sdf')
+
+        # URDF file (for robot_state_publisher / RViz model)
+        urdf_file = os.path.join(pkg_share, 'urdf', 'vehicle_blue.urdf')
 
         # Goal sphere SDF file
         goal_sphere_file = os.path.join(pkg_share, 'sdf', 'goal_sphere.sdf')
@@ -102,10 +105,20 @@ def generate_launch_description():
         )
 
         # Static transform publishers
-        # map → maze_world: identity so that A* (which uses 'map' frame) and
-        # Gazebo ground-truth poses (published in 'maze_world') share the same
-        # origin. No map→odom offset needed — planner reads ground truth
-        # directly from /model/vehicle_blue/pose, not from odometry.
+        # map → odom encodes the robot's spawn pose so that map → odom → base_link
+        # gives true world coordinates. Without this, odom starts at (0,0,0) and all
+        # A* waypoints (which are in world/map coords) are in the wrong frame.
+        static_tf = Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            arguments=[
+                robot_pose['x'], robot_pose['y'], '0',
+                robot_pose['yaw'], '0', '0',
+                'map', 'odom'
+            ],
+            output='screen'
+        )
+        
         maze_world_tf = Node(
             package='tf2_ros',
             executable='static_transform_publisher',
@@ -120,10 +133,17 @@ def generate_launch_description():
             output='screen'
         )
 
-        # NOTE: robot_state_publisher is NOT included here.
-        # It expects URDF but was given an SDF file, causing it to publish a
-        # conflicting/malformed TF tree alongside the Gazebo bridge's correct TF.
-        # All TF data comes from the gz-ros2 bridge (/tf topic).
+        # Robot state publisher
+        robot_description = open(urdf_file, 'r').read() if os.path.exists(urdf_file) else open(vehicle_model_file, 'r').read()
+        robot_state_publisher = Node(
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            name='robot_state_publisher',
+            output='screen',
+            parameters=[{
+                'robot_description': robot_description
+            }]
+        )
 
         # Map publisher
         map_publisher = Node(
@@ -148,8 +168,10 @@ def generate_launch_description():
             spawn_goal1,
             spawn_goal2,
             spawn_goal3,
+            static_tf,
             maze_world_tf,
             lidar_tf,
+            robot_state_publisher,
             map_publisher,
             goal_points_publisher
         ]
