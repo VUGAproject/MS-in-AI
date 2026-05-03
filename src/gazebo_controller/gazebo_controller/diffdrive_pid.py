@@ -194,7 +194,10 @@ class DiffDrivePID(Node):
         # If any forward ray (±60°) is closer than 0.22 m the robot is approaching
         # a wall head-on.  Back up straight until the arc is clear (> 0.50 m).
         # Reads below 0.28 m are filtered out as they may be chassis reflections.
-        if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
+        # Suppressed when already close to goal: a wall behind/beside the goal
+        # must not prevent the robot from driving the last metre to completion.
+        _near_goal = dist < (self.goal_tolerance * 2.5)
+        if not _near_goal and self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
             n_w = len(self._lidar_ranges)
             fwd_min = 30.0
             for i in range(n_w):
@@ -210,6 +213,8 @@ class DiffDrivePID(Node):
                     self._reverse_until_clear = False  # enough space — resume
                 else:
                     return np.array([-0.3, 0.0])  # back up straight
+        elif _near_goal:
+            self._reverse_until_clear = False  # cancel any active reversal at goal proximity
 
         # ── Stuck recovery ──────────────────────────────────────────────────
         if self._recovering:
