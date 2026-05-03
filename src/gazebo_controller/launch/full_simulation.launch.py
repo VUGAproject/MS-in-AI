@@ -44,17 +44,17 @@ def generate_launch_description():
             'ki': 0.0,
             'lookahead': 0.60,
             'publish_rate': 40.0,
-            'max_linear_vel': 1.8,
+            'max_linear_vel': 1.4,
             'max_angular_vel': 2.6,
             'goal_tolerance': 0.30,
-            'heading_rotate_threshold': 1.20,
-            'heading_slowdown_threshold': 0.45,
-            'min_turn_speed_scale': 0.35,
+            'heading_rotate_threshold': 0.50,
+            'heading_slowdown_threshold': 0.30,
+            'min_turn_speed_scale': 0.25,
         }
         planner_params = {
             'goal_reach_tolerance': 0.40,
-            'waypoint_stride_cells': 6,
-            'obstacle_inflation_cells': 2,
+            'waypoint_stride_cells': 3,
+            'obstacle_inflation_cells': 4,
         }
 
         if drive_profile == 'presentation_safe':
@@ -63,57 +63,63 @@ def generate_launch_description():
                 'kd': 0.45,
                 'lookahead': 0.50,
                 'publish_rate': 35.0,
-                'max_linear_vel': 1.15,
+                'max_linear_vel': 1.00,
                 'max_angular_vel': 2.2,
                 'goal_tolerance': 0.22,
-                'heading_rotate_threshold': 1.00,
-                'heading_slowdown_threshold': 0.35,
-                'min_turn_speed_scale': 0.25,
+                'heading_rotate_threshold': 0.45,
+                'heading_slowdown_threshold': 0.25,
+                'min_turn_speed_scale': 0.20,
                 'base_frame': 'vehicle_blue/base_link',
             })
             planner_params.update({
                 'goal_reach_tolerance': 0.30,
                 'waypoint_stride_cells': 4,
-                'obstacle_inflation_cells': 3,
+                'obstacle_inflation_cells': 4,
             })
 
         if maze_folder == 'Maze_ng':
-            # Dense maze: keep faster than baseline, but preserve tighter turn margin.
+            # Paramètres optimisés anti-oscillations
             pid_params.update({
-                'max_linear_vel': 1.45,
-                'max_angular_vel': 2.8,
-                'lookahead': 0.55,
-                'heading_rotate_threshold': 1.10,
+                'kp': 0.85,
+                'kd': 0.60,
+                'max_linear_vel': 0.85,
+                'max_angular_vel': 2.0,
+                'lookahead': 0.45,
+                'heading_rotate_threshold': 0.40,
                 'goal_tolerance': 0.28,
             })
             planner_params.update({
-                'waypoint_stride_cells': 4,
-                'obstacle_inflation_cells': 3,
+                'waypoint_stride_cells': 3,
+                'obstacle_inflation_cells': 6, # Légèrement moins car labyrinthe dense
             })
         elif maze_folder == 'Maze_hr':
+            # Paramètres optimisés anti-oscillations
             pid_params.update({
-                'max_linear_vel': 1.80,
-                'max_angular_vel': 2.7,
-                'lookahead': 0.60,
-                'heading_rotate_threshold': 1.20,
+                'kp': 0.85,
+                'kd': 0.60,
+                'max_linear_vel': 0.90,
+                'max_angular_vel': 2.0,
+                'lookahead': 0.45,
+                'heading_rotate_threshold': 0.40,
             })
             planner_params.update({
-                'waypoint_stride_cells': 6,
-                'obstacle_inflation_cells': 2,
+                'waypoint_stride_cells': 3,
+                'obstacle_inflation_cells': 7,
             })
         elif maze_folder == 'Maze_ql_1':
-            # More open sections but tight corners near goal_3: stride=4 keeps
-            # waypoints close enough that each is always line-of-sight reachable.
+            # Paramètres optimisés anti-oscillations et évitement total des murs
             pid_params.update({
-                'max_linear_vel': 2.10,
-                'max_angular_vel': 2.5,
-                'lookahead': 0.65,
-                'heading_rotate_threshold': 1.30,
+                'kp': 0.85,             # Réaction plus douce pour éviter les zigzags
+                'kd': 0.60,             # Fort amortissement pour stopper les oscillations
+                'max_linear_vel': 0.90, # Vitesse réduite pour une précision parfaite
+                'max_angular_vel': 2.0,
+                'lookahead': 0.45,      # Equilibre entre suivi strict et lissage
+                'heading_rotate_threshold': 0.40,
                 'goal_tolerance': 0.33,
             })
             planner_params.update({
-                'waypoint_stride_cells': 4,
-                'obstacle_inflation_cells': 3,
+                'waypoint_stride_cells': 3,
+                'obstacle_inflation_cells': 7, # ~0.35m de marge de sécurité (le robot fait 0.4m de long)
                 'goal_reach_tolerance': 0.45,
             })
 
@@ -124,7 +130,7 @@ def generate_launch_description():
                     'max_linear_vel': 1.00,
                     'max_angular_vel': 2.3,
                     'lookahead': 0.48,
-                    'heading_rotate_threshold': 0.95,
+                    'heading_rotate_threshold': 0.45,
                 })
                 planner_params.update({
                     'waypoint_stride_cells': 3,
@@ -132,17 +138,17 @@ def generate_launch_description():
                 })
             elif maze_folder == 'Maze_hr':
                 pid_params.update({
-                    'max_linear_vel': 1.15,
+                    'max_linear_vel': 1.00,
                     'max_angular_vel': 2.2,
                     'lookahead': 0.50,
                 })
                 planner_params.update({
                     'waypoint_stride_cells': 4,
-                    'obstacle_inflation_cells': 3,
+                    'obstacle_inflation_cells': 4,
                 })
             elif maze_folder == 'Maze_ql_1':
                 pid_params.update({
-                    'max_linear_vel': 1.30,
+                    'max_linear_vel': 1.20,
                     'max_angular_vel': 2.2,
                     'lookahead': 0.55,
                 })
