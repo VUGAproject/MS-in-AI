@@ -47,7 +47,7 @@ def generate_launch_description():
             'max_linear_vel': 1.8,
             'max_angular_vel': 2.6,
             'goal_tolerance': 0.30,
-            'heading_rotate_threshold': 1.00,
+            'heading_rotate_threshold': 0.60,
             'heading_slowdown_threshold': 0.45,
             'min_turn_speed_scale': 0.35,
         }
@@ -66,7 +66,7 @@ def generate_launch_description():
                 'max_linear_vel': 1.15,
                 'max_angular_vel': 2.2,
                 'goal_tolerance': 0.22,
-                'heading_rotate_threshold': 1.00,
+                'heading_rotate_threshold': 0.60,
                 'heading_slowdown_threshold': 0.35,
                 'min_turn_speed_scale': 0.25,
                 'base_frame': 'vehicle_blue/base_link',
@@ -83,7 +83,7 @@ def generate_launch_description():
                 'max_linear_vel': 1.45,
                 'max_angular_vel': 2.8,
                 'lookahead': 0.55,
-                'heading_rotate_threshold': 1.00,
+                'heading_rotate_threshold': 0.60,
                 'goal_tolerance': 0.28,
             })
             planner_params.update({
@@ -95,7 +95,7 @@ def generate_launch_description():
                 'max_linear_vel': 1.80,
                 'max_angular_vel': 2.7,
                 'lookahead': 0.60,
-                'heading_rotate_threshold': 1.00,
+                'heading_rotate_threshold': 0.60,
             })
             planner_params.update({
                 'waypoint_stride_cells': 3,
@@ -108,7 +108,7 @@ def generate_launch_description():
                 'max_linear_vel': 2.10,
                 'max_angular_vel': 2.5,
                 'lookahead': 0.65,
-                'heading_rotate_threshold': 1.00,
+                'heading_rotate_threshold': 0.60,
                 'goal_tolerance': 0.33,
             })
             planner_params.update({
@@ -124,7 +124,7 @@ def generate_launch_description():
                     'max_linear_vel': 1.00,
                     'max_angular_vel': 2.3,
                     'lookahead': 0.48,
-                    'heading_rotate_threshold': 0.95,
+                    'heading_rotate_threshold': 0.60,
                 })
                 planner_params.update({
                     'waypoint_stride_cells': 3,
