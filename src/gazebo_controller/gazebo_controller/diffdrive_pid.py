@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+import time
+import numpy as np
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile
+
+from geometry_msgs.msg import PoseStamped, Twist
+from nav_msgs.msg import Odometry, Path
+from std_msgs.msg import Empty
+from sensor_msgs.msg import LaserScan
+from tf2_msgs.msg import TFMessage
+import tf2_ros
+
+def euler_from_quaternion(quaternion):
+    """
+    Converts quaternion (w in last place) to euler roll, pitch, yaw
+    """
+    x = quaternion.x
+    y = quaternion.y
+    z = quaternion.z
+    w = quaternion.w
+
+    sinr_cosp = 2 * (w * x + y * z)
+    cosr_cosp = 1 - 2 * (x * x + y * y)
+    roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+    sinp = 2 * (w * y - z * x)
+    # Clamp sinp to avoid domain errors in arcsin
+    sinp = np.clip(sinp, -1.0, 1.0)
+    pitch = np.arcsin(sinp)
+
+    siny_cosp = 2 * (w * z + x * y)
+    cosy_cosp = 1 - 2 * (y * y + z * z)
+    yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+    return roll, pitch, yaw
+
+
+def normalize_angle(angle):
+    return np.arctan2(np.sin(angle), np.cos(angle))
+
+
+class DiffDrivePID(Node):
+    """
+    PID controller for differential drive robot using trailer hitch approach.
+    Based on EN613 midterm solution.
+    """
+    def __init__(self):
+        super().__init__('diffdrive_pid')
+
+        # PID gains
+        self.declare_parameter('kp', 0.8)
+        self.declare_parameter('kd', 0.2)
+        self.declare_parameter('ki', 0.0)
+        self.declare_parameter('lookahead', 0.5)  # trailer hitch distance
+        self.declare_parameter('publish_rate', 30.0)
+        self.declare_parameter('max_linear_vel', 1.5)
+        self.declare_parameter('max_angular_vel', 1.5)
+        self.declare_parameter('angular_scale', 0.7)  # Scale down angular commands
+        self.declare_parameter('goal_tolerance', 0.25)
+        self.declare_parameter('heading_rotate_threshold', 2.3)
+        self.declare_parameter('heading_slowdown_threshold', 0.45)
+        self.declare_parameter('min_turn_speed_scale', 0.35)
+        self.declare_parameter('base_frame', 'vehicle_blue/base_link')
+
+        self.k_p = float(self.get_parameter('kp').get_parameter_value().double_value)
+        self.k_d = float(self.get_parameter('kd').get_parameter_value().double_value)
+        self.k_i = float(self.get_parameter('ki').get_parameter_value().double_value)
+        self.length = float(self.get_parameter('lookahead').get_parameter_value().double_value)
+        self.publish_rate = float(self.get_parameter('publish_rate').get_parameter_value().double_value)
+        self.max_linear_vel = float(self.get_parameter('max_linear_vel').get_parameter_value().double_value)
+        self.max_angular_vel = float(self.get_parameter('max_angular_vel').get_parameter_value().double_value)
+        self.goal_tolerance = float(self.get_parameter('goal_tolerance').get_parameter_value().double_value)
+        self.heading_rotate_threshold = float(self.get_parameter('heading_rotate_threshold').get_parameter_value().double_value)
+        self.heading_slowdown_threshold = float(self.get_parameter('heading_slowdown_threshold').get_parameter_value().double_value)
+        self.min_turn_speed_scale = float(self.get_parameter('min_turn_speed_scale').get_parameter_value().double_value)
+        self.base_frame = self.get_parameter('base_frame').get_parameter_value().string_value
+        self.dt = 1.0 / self.publish_rate
+
+        # I/O
+        qos_profile = QoSProfile(depth=10)
+        self.goal_sub = self.create_subscription(PoseStamped, '/planner_goal_pose', self.goal_received, 10)
+        self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_received, 20)
+        # Ground truth pose from Gazebo PosePublisher plugin (world frame, no drift).
+        self.pose_sub = self.create_subscription(TFMessage, '/model/vehicle_blue/pose', self.true_pose_cb, 10)
+        self.vel_pub = self.create_publisher(Twist, '/cmd_vel', qos_profile)
+        self.trail_pub = self.create_publisher(Path, '/robot_trail', 10)
+        self.skip_wp_pub = self.create_publisher(Empty, '/skip_waypoint', 10)
+
+        # State
+        self.desired_goal = np.array([0.0, 0.0])
+        self.robot_state = np.array([0.0, 0.0, 0.0])
+        self.Xp_last = None
+        self.has_goal = False
+        self.has_odom = False
+        self._has_ground_truth = False  # True once Gazebo TF has been received
+
+        self.trail_path = Path()
+        self.trail_path.header.frame_id = 'map'
+        self.last_trail_xy = None
+
+        # LiDAR gap-navigation state
+        self._lidar_ranges = None
+        self._lidar_angle_min = 0.0
+        self._lidar_angle_inc = 0.1745
+        self.lidar_sub = self.create_subscription(LaserScan, '/lidar', self.lidar_cb, 10)
+
+        # Stuck recovery state
+        self._recovering = False
+        self._recovery_frames = 0
+        self._recovery_direction = 1.0
+        self._stuck_last_xy = None
+        self._stuck_last_time = None
+        self._stuck_last_heading = 0.0
+        self._stuck_count = 0          # consecutive stuck events; triggers waypoint skip
+        self._struggling_since = None  # tracks how long robot is making poor progress
+        self._reverse_until_clear = False  # immediate escape: back up until forward is open
+        self._recovery_total = int(1.5 * self.publish_rate)  # 1.5 s total recovery
+        self._recovery_back_frames = int(0.5 * self.publish_rate)  # first 0.5 s: back up straight
+        self._prev_rotating = False   # tracks rotation→forward transition for grace period
+        self._grace_until = 0.0       # monotonic time: suppress reverse until this time
+
+        # Timer loop
+        self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
+
+        self.get_logger().info(f'DiffDrivePID started: kp={self.k_p}, kd={self.k_d}, ki={self.k_i}, lookahead={self.length}, rate={self.publish_rate} Hz')
+
+    def lidar_cb(self, msg: LaserScan):
+        self._lidar_ranges = np.array(msg.ranges, dtype=float)
+        self._lidar_angle_min = float(msg.angle_min)
+        self._lidar_angle_inc = float(msg.angle_increment)
+
+    def true_pose_cb(self, msg: TFMessage):
+        """Receive Gazebo ground-truth world position.
+        The transform frame_id='maze_world', child_frame_id='vehicle_blue'
+        gives the vehicle's actual world coordinates."""
+        for tf in msg.transforms:
+            if tf.child_frame_id == 'vehicle_blue' and tf.header.frame_id == 'maze_world':
+                t = tf.transform.translation
+                _, _, yaw = euler_from_quaternion(tf.transform.rotation)
+                self.robot_state = np.array([float(t.x), float(t.y), yaw])
+                self.has_odom = True
+                self._has_ground_truth = True
+                return
+
+    def odom_received(self, msg):
+        # Fallback: use odometry to seed robot_state until the Gazebo ground-truth
+        # TF arrives.  Once true_pose_cb has fired at least once we stop updating
+        # from odometry so ground-truth remains the sole position source.
+        if not self._has_ground_truth:
+            x = float(msg.pose.pose.position.x)
+            y = float(msg.pose.pose.position.y)
+            _, _, yaw = euler_from_quaternion(msg.pose.pose.orientation)
+            self.robot_state = np.array([x, y, yaw])
+        self.has_odom = True
+
+    def goal_received(self, msg):
+        """Callback for goal pose messages."""
+        # The planner always publishes in 'map' frame, which is statically
+        # aligned to 'odom' and 'maze_world'.  Accept the x,y directly.
+        self.desired_goal = np.array([msg.pose.position.x, msg.pose.position.y])
+        self.get_logger().info(
+            f'Goal set to: [{self.desired_goal[0]:.3f}, {self.desired_goal[1]:.3f}]'
+            f' (frame: {msg.header.frame_id})')
+
+        # Reset the integral term when a new goal is set
+        self.Xp_last = None
+        self.has_goal = True
+
+    def compute_vel(self):
+        """Go-to-goal controller with LiDAR gap navigation and stuck-recovery fallback."""
+        if not self.has_goal:
+            self._stuck_last_time = None
+            self._recovering = False
+            return np.array([0.0, 0.0])
+
+        x_r, y_r, th_r = self.robot_state
+        cur_pos = np.array([x_r, y_r])
+
+        dx = self.desired_goal[0] - x_r
+        dy = self.desired_goal[1] - y_r
+        dist = float(np.hypot(dx, dy))
+
+        if dist < self.goal_tolerance:
+            self.has_goal = False
+            self._recovering = False
+            self._reverse_until_clear = False
+            self._stuck_last_time = None
+            self._stuck_count = 0
+            self._struggling_since = None
+            return np.array([0.0, 0.0])
+
+        # ── Immediate wall-hit reversal ────────────────────────────────────────
+        # Arc narrowed to ±30°: inner-corner walls sit at ~±30-45° after a 90° turn
+        # and were triggering reverse with the old ±45° arc.  ±30° (3 rays) only
+        # catches genuine head-on approaches, not exited-corner walls.
+        # Suppressed during pure-rotation (robot can't close on a wall while spinning).
+        # Post-rotation grace (0.4 s): gives the robot time to accelerate away from
+        # the corner before the reverse check re-enables.  Prevents the oscillation
+        # loop where reverse fires the instant the spin completes.
+        goal_angle_pre = np.arctan2(dy, dx)
+        heading_pre = normalize_angle(goal_angle_pre - th_r)
+        currently_rotating = abs(heading_pre) > self.heading_rotate_threshold
+
+        _now_t = time.monotonic()
+        if self._prev_rotating and not currently_rotating:
+            # Just finished a spin — start grace window.
+            self._grace_until = _now_t + 0.4
+        self._prev_rotating = currently_rotating
+        _in_grace = _now_t < self._grace_until
+
+        if not currently_rotating and not _in_grace and self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
+            n_w = len(self._lidar_ranges)
+            fwd_min = 30.0
+            for i in range(n_w):
+                ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
+                if abs(ray_a) < 0.524:  # ±30°
+                    r = float(self._lidar_ranges[i])
+                    if np.isfinite(r) and r > 0.01:  # include blind-zone reads
+                        fwd_min = min(fwd_min, r)
+            if fwd_min < 0.30:
+                self._reverse_until_clear = True
+            if self._reverse_until_clear:
+                if fwd_min > 0.50:
+                    self._reverse_until_clear = False  # enough space — resume
+                else:
+                    goal_angle_rev = np.arctan2(
+                        self.desired_goal[1] - y_r,
+                        self.desired_goal[0] - x_r)
+                    err_rev = normalize_angle(goal_angle_rev - th_r)
+                    az_rev = float(np.clip(
+                        self.k_p * 3.0 * err_rev,
+                        -self.max_angular_vel, self.max_angular_vel))
+                    return np.array([-0.3, az_rev])
+        elif currently_rotating or _in_grace:
+            self._reverse_until_clear = False
+
+        # ── Stuck recovery ──────────────────────────────────────────────────
+        if self._recovering:
+            self._recovery_frames += 1
+            if self._recovery_frames < self._recovery_total:
+                if self._recovery_frames < self._recovery_back_frames:
+                    # Phase 1: back up straight to create separation from the wall
+                    return np.array([-0.3, 0.0])
+                else:
+                    # Phase 2: gentle forward arc toward goal
+                    goal_angle_rec = np.arctan2(
+                        self.desired_goal[1] - self.robot_state[1],
+                        self.desired_goal[0] - self.robot_state[0])
+                    err_rec = normalize_angle(goal_angle_rec - self.robot_state[2])
+                    az_rec = float(np.clip(self.k_p * 2.0 * err_rec,
+                                          -self.max_angular_vel, self.max_angular_vel))
+                    return np.array([0.3, az_rec])
+            # Recovery done — reset and resume normal driving
+            self._recovering = False
+            self._stuck_last_xy = cur_pos.copy()
+            self._stuck_last_time = time.monotonic()
+
+        now = time.monotonic()
+        if self._stuck_last_time is None:
+            self._stuck_last_xy = cur_pos.copy()
+            self._stuck_last_time = now
+            self._stuck_last_heading = th_r
+        elif now - self._stuck_last_time > 3.0:
+            moved = float(np.linalg.norm(cur_pos - self._stuck_last_xy))
+            turned = abs(normalize_angle(th_r - self._stuck_last_heading))
+            # Only declare stuck if robot barely moved AND barely turned.
+            # A robot arcing through a corner has large heading change — not stuck.
+            if moved < 0.15 and turned < 0.5:
+                # Recovery direction: prefer the side with more LiDAR clearance.
+                recovery_dir = 1.0  # default: turn left
+                if self._lidar_ranges is not None:
+                    nl = len(self._lidar_ranges)
+                    left_sum, right_sum = 0.0, 0.0
+                    for i in range(nl):
+                        ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
+                        r = float(self._lidar_ranges[i]) if np.isfinite(self._lidar_ranges[i]) else 0.0
+                        if 0.17 < ray_a < 1.57:   # left arc  ~10°–90°
+                            left_sum += r
+                        elif -1.57 < ray_a < -0.17:  # right arc ~10°–90°
+                            right_sum += r
+                    if right_sum > left_sum:
+                        recovery_dir = -1.0
+                else:
+                    # Fall back to goal-heading direction if no LiDAR data yet
+                    goal_angle = np.arctan2(dy, dx)
+                    err = normalize_angle(goal_angle - th_r)
+                    recovery_dir = 1.0 if err >= 0 else -1.0
+                self._recovery_direction = recovery_dir
+                self._stuck_count += 1
+                # After 2 consecutive stuck events (~6+ s), skip to next waypoint
+                if self._stuck_count >= 2:
+                    self.get_logger().warn(
+                        f'Stuck {self._stuck_count} times consecutively — requesting waypoint skip')
+                    self.skip_wp_pub.publish(Empty())
+                    self._stuck_count = 0
+                self._recovering = True
+                self._recovery_frames = 0
+                return np.array([-0.2, self._recovery_direction * self.max_angular_vel])
+            else:
+                self._stuck_last_xy = cur_pos.copy()
+                self._stuck_last_time = now
+                self._stuck_last_heading = th_r
+                self._stuck_count = 0          # real progress — reset counter
+                self._struggling_since = None  # made real progress, reset escalation
+
+        # ── Pure A* heading tracking ───────────────────────────────────────
+        # Gap nav removed. The robot follows A* waypoints directly.
+        # Emergency reverse (above) handles imminent wall contact.
+        # Stuck recovery (above) handles getting trapped.
+        goal_angle = np.arctan2(dy, dx)
+        heading_to_goal = normalize_angle(goal_angle - th_r)
+        steer = heading_to_goal
+
+        # ── Heading and velocity control ────────────────────────────────────
+        heading_err = float(normalize_angle(steer))
+        abs_err = abs(heading_err)
+
+        if abs_err > self.heading_rotate_threshold:
+            az = float(np.clip(self.k_p * 2.0 * heading_err,
+                               -self.max_angular_vel, self.max_angular_vel))
+            return np.array([0.0, az])
+
+        lx = float(np.clip(self.k_p * dist, 0.0, self.max_linear_vel))
+        if abs_err > self.heading_slowdown_threshold:
+            lx *= max(self.min_turn_speed_scale, 1.0 - abs_err)
+
+        az = float(np.clip(self.k_p * 2.0 * heading_err,
+                           -self.max_angular_vel, self.max_angular_vel))
+        return np.array([lx, az])
+
+    def publish_robot_cmd(self):
+        """Main control loop callback"""
+        if not self.has_odom:
+            return  # wait for first ground-truth pose
+
+        # Append world position to trail for RViz visualization.
+        cur_xy = (self.robot_state[0], self.robot_state[1])
+        if self.last_trail_xy is None or np.linalg.norm(
+                np.array(cur_xy) - np.array(self.last_trail_xy)) > 0.05:
+            p = PoseStamped()
+            p.header.stamp = self.get_clock().now().to_msg()
+            p.header.frame_id = 'map'
+            p.pose.position.x = float(cur_xy[0])
+            p.pose.position.y = float(cur_xy[1])
+            p.pose.position.z = 0.0
+            p.pose.orientation.w = 1.0
+            self.trail_path.header.stamp = p.header.stamp
+            self.trail_path.poses.append(p)
+            if len(self.trail_path.poses) > 2000:
+                self.trail_path.poses = self.trail_path.poses[-2000:]
+            self.trail_pub.publish(self.trail_path)
+            self.last_trail_xy = cur_xy
+
+        desired_vel = self.compute_vel()
+
+        msg = Twist()
+        msg.linear.x = float(desired_vel[0])
+        msg.linear.y = 0.0
+        msg.linear.z = 0.0
+        msg.angular.x = 0.0
+        msg.angular.y = 0.0
+        msg.angular.z = float(desired_vel[1])
+
+        self.vel_pub.publish(msg)
+
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = DiffDrivePID()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
