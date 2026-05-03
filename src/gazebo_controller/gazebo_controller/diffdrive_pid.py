@@ -335,7 +335,9 @@ class DiffDrivePID(Node):
 
             # When struggling > 5 s: lower clearance bar and widen cone so the
             # robot "sees" tight or diagonal paths it was previously ignoring.
-            MIN_CLEAR = 0.35 if struggling else 0.55
+            # Normal MIN_CLEAR = 0.35 so gap nav only fires near real wall contact,
+            # not constantly in every corridor — trust A* waypoints by default.
+            MIN_CLEAR = 0.28 if struggling else 0.35
             blocked_cone = 1.047 if struggling else 0.785  # ±60° escalated, ±45° normal
             open_mask = rng > MIN_CLEAR
 
@@ -378,8 +380,9 @@ class DiffDrivePID(Node):
                         if score > best_score:
                             best_score = score
                             best_center = center_angle
-                    # Blend: 90% gap center, 10% goal — follow corridor geometry with stronger goal pull
-                    blended = 0.90 * best_center + 0.10 * heading_to_goal
+                    # Blend: 80% gap center, 20% goal — trust A* path more since
+                    # waypoints now route through corridor centres via distance map.
+                    blended = 0.80 * best_center + 0.20 * heading_to_goal
                     steer = normalize_angle(blended)
 
         # ── Heading and velocity control ────────────────────────────────────
