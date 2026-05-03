@@ -343,12 +343,14 @@ class DiffDrivePID(Node):
                 30.0
             )
 
-            # Gap nav threshold deliberately higher than reverse_until_clear (0.30 m)
-            # so the two systems operate in separate distance bands:
-            #   0.28–0.30 m → reverse_until_clear (emergency escape)
-            #   0.30–0.38 m → gap nav steers around obstacle
-            #   > 0.38 m    → pure A* waypoint tracking
-            MIN_CLEAR = 0.30 if struggling else 0.38
+            # Gap nav threshold bands:
+            #   < 0.25 m normal / < 0.28 m struggling → gap nav steers
+            #   < 0.30 m → emergency reverse takes over
+            # MIN_CLEAR is intentionally below the 0.30 m reverse trigger so gap
+            # nav acts as a soft pre-warning, not a constant corridor distraction.
+            # A 0.6 m corridor puts walls ~0.30 m from robot center; the old
+            # 0.38 m threshold meant gap nav fired even in a clear straight run.
+            MIN_CLEAR = 0.28 if struggling else 0.25
             blocked_cone = 1.047 if struggling else 0.524  # ±60° escalated, ±30° normal
             open_mask = rng > MIN_CLEAR
 

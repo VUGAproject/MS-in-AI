@@ -2,6 +2,11 @@
 <sdf version="1.10">
    <model name='goal_sphere'>
        <static>true</static>
+       <!-- No <collision> block: goal spheres are purely visual markers.
+            They have no physics collision mesh and no sensor-visible geometry
+            that would register on the gpu_lidar (spheres spawn at z=0.04 m,
+            top at z=0.08 m; lidar sits at z=0.16 m and its horizontal rays
+            pass ~0.08 m above the sphere entirely). -->
        <link name='link'>
            <visual name='visual'>
                <geometry>
