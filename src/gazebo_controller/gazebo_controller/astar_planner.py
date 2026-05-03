@@ -336,10 +336,12 @@ class AStarPlanner(Node):
         assert self.occ_grid is not None
         grid = self.occ_grid
         h, w = grid.shape
-        # Weight for wall-proximity penalty: higher = paths hug corridor centres more.
-        # Keep small so the penalty nudges A* toward centres without dominating step cost
-        # in narrow corridors (which would slow planning and force unreachable waypoints).
-        WALL_WEIGHT = 0.25
+        # Exponential wall-proximity penalty: cells near obstacles cost more so A*
+        # routes through corridor centres.  Unlike the old 1/dist cap, the exponential
+        # preserves a gradient even in narrow corridors (where capped values were
+        # identical for edge vs centre cells, letting A* hug walls freely).
+        WALL_WEIGHT = 2.0   # penalty magnitude at the inflated-wall boundary
+        WALL_SIGMA  = 0.25  # falloff distance in metres (≈5 cells at 0.05 m/cell)
 
         if grid[start[0], start[1]] >= 50 or grid[goal[0], goal[1]] >= 50:
             return []
@@ -380,10 +382,11 @@ class AStarPlanner(Node):
                         continue
 
                 nxt = (nr, nc)
-                # Wall-proximity penalty: cells near obstacles cost more so A*
-                # naturally routes through corridor centres.
-                # Capped at 1.0 to prevent narrow corridors from exploding the cost space.
-                wall_penalty = (min(WALL_WEIGHT / (dist_map[nr, nc] + 0.01), 1.0)
+                # Exponential wall-proximity penalty.  At the inflated-wall boundary
+                # (dist=0) penalty = WALL_WEIGHT; decays smoothly toward 0 in open
+                # space.  This creates a consistent gradient toward corridor centres
+                # in passages of any width, unlike the old capped 1/dist formula.
+                wall_penalty = (WALL_WEIGHT * math.exp(-dist_map[nr, nc] / WALL_SIGMA)
                                 if dist_map is not None else 0.0)
                 tentative = g_score[current] + move_cost + wall_penalty
                 if tentative < g_score.get(nxt, float('inf')):
