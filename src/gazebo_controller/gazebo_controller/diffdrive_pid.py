@@ -220,9 +220,10 @@ class DiffDrivePID(Node):
             return np.array([0.0, 0.0])
 
         # ── Immediate wall-hit reversal ────────────────────────────────────────
-        # If any ray in the forward ±60° arc is closer than 0.22 m the robot is
-        # essentially touching a wall.  Back up until the whole forward arc is
-        # clear (> 0.50 m) before resuming normal navigation.
+        # If the minimum valid forward reading (above self-filter 0.28 m) is
+        # within 0.35 m the robot is dangerously close to a wall — back up
+        # until the full forward arc clears 0.50 m before resuming.
+        # NOTE: trigger must be > 0.28 (self-filter) so it can actually fire.
         if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
             n_w = len(self._lidar_ranges)
             fwd_min = 30.0
@@ -232,7 +233,7 @@ class DiffDrivePID(Node):
                     r = float(self._lidar_ranges[i])
                     if np.isfinite(r) and r > 0.28:
                         fwd_min = min(fwd_min, r)
-            if fwd_min < 0.22:
+            if fwd_min < 0.35:
                 self._reverse_until_clear = True
             if self._reverse_until_clear:
                 if fwd_min > 0.50:
