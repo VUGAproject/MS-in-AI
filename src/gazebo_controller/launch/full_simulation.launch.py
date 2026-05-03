@@ -102,7 +102,8 @@ def generate_launch_description():
                 'obstacle_inflation_cells': 2,
             })
         elif maze_folder == 'Maze_ql_1':
-            # More open sections: longest stride and highest linear speed.
+            # More open sections but tight corners near goal_3: stride=4 keeps
+            # waypoints close enough that each is always line-of-sight reachable.
             pid_params.update({
                 'max_linear_vel': 2.10,
                 'max_angular_vel': 2.5,
@@ -111,7 +112,7 @@ def generate_launch_description():
                 'goal_tolerance': 0.33,
             })
             planner_params.update({
-                'waypoint_stride_cells': 8,
+                'waypoint_stride_cells': 4,
                 'obstacle_inflation_cells': 2,
                 'goal_reach_tolerance': 0.45,
             })
