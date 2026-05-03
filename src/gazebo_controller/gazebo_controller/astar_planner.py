@@ -273,7 +273,66 @@ class AStarPlanner(Node):
             sampled = [path_rc[-1]]
         if sampled[-1] != path_rc[-1]:
             sampled.append(path_rc[-1])
-        return [self.grid_to_world(r, c) for r, c in sampled]
+
+        raw_count = len(sampled)
+
+        # Greedy string-pulling: skip any intermediate waypoint that is visible
+        # in a straight line from the previous kept waypoint (using the inflated
+        # occupancy grid so the robot's width is respected).  Always keep the
+        # final goal cell.
+        pruned = self._string_pull(sampled)
+
+        self.get_logger().info(
+            f'Path pruning: {raw_count} raw waypoints → {len(pruned)} after string-pull')
+
+        return [self.grid_to_world(r, c) for r, c in pruned]
+
+    def _string_pull(self, cells: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """Greedy visibility string-pull over the inflated occupancy grid."""
+        if len(cells) <= 2:
+            return cells
+        result = [cells[0]]
+        i = 0
+        while i < len(cells) - 1:
+            # Scan backward from the end: find the farthest cell reachable in
+            # a straight unobstructed line from the last kept cell.
+            j = len(cells) - 1
+            while j > i + 1:
+                if self._bresenham_clear(result[-1], cells[j]):
+                    break
+                j -= 1
+            result.append(cells[j])
+            i = j
+        return result
+
+    def _bresenham_clear(self, a: Tuple[int, int], b: Tuple[int, int]) -> bool:
+        """Return True if every cell on the Bresenham line a→b is free (< 50)."""
+        assert self.occ_grid is not None
+        grid = self.occ_grid
+        h, w = grid.shape
+        r0, c0 = a
+        r1, c1 = b
+        dr = abs(r1 - r0)
+        dc = abs(c1 - c0)
+        sr = 1 if r1 > r0 else -1
+        sc = 1 if c1 > c0 else -1
+        err = dr - dc
+        r, c = r0, c0
+        while True:
+            if r < 0 or r >= h or c < 0 or c >= w:
+                return False
+            if grid[r, c] >= 50:
+                return False
+            if r == r1 and c == c1:
+                break
+            e2 = 2 * err
+            if e2 > -dc:
+                err -= dc
+                r += sr
+            if e2 < dr:
+                err += dr
+                c += sc
+        return True
 
     def a_star(self, start: Tuple[int, int], goal: Tuple[int, int],
                dist_map: Optional[np.ndarray] = None) -> List[Tuple[int, int]]:
