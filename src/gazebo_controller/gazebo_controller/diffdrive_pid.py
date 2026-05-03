@@ -221,11 +221,17 @@ class DiffDrivePID(Node):
             return np.array([0.0, 0.0])
 
         # ── Immediate wall-hit reversal ────────────────────────────────────────
-        # Trigger at 0.30 m — genuine imminent contact.
-        # Exit when full forward arc > 0.50 m.
-        # While reversing, also spin toward the goal so the robot escapes
-        # sideways and is already oriented for the next forward move.
-        if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
+        # Trigger at 0.30 m — genuine imminent contact WHILE DRIVING FORWARD.
+        # Suppressed during pure-rotation: if the robot is only spinning it cannot
+        # get closer to the wall, so a nearby forward reading is the wall it is
+        # already beside — not a new collision risk.  Firing reverse here is what
+        # prevents 90° turns from completing (spin gets interrupted every time
+        # the wall sweeps through the forward arc).
+        goal_angle_pre = np.arctan2(dy, dx)
+        heading_pre = normalize_angle(goal_angle_pre - th_r)
+        currently_rotating = abs(heading_pre) > self.heading_rotate_threshold
+
+        if not currently_rotating and self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
             n_w = len(self._lidar_ranges)
             fwd_min = 30.0
             for i in range(n_w):
@@ -250,6 +256,10 @@ class DiffDrivePID(Node):
                         self.k_p * 3.0 * err_rev,
                         -self.max_angular_vel, self.max_angular_vel))
                     return np.array([-0.3, az_rev])
+        elif currently_rotating:
+            # Clear reverse flag when we enter a rotation phase — a stale flag
+            # from a previous forward move would otherwise fire immediately.
+            self._reverse_until_clear = False
 
         # ── Stuck recovery ──────────────────────────────────────────────────
         if self._recovering:
