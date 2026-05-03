@@ -119,8 +119,6 @@ class DiffDrivePID(Node):
         self._reverse_until_clear = False  # immediate escape: back up until forward is open
         self._recovery_total = int(1.5 * self.publish_rate)  # 1.5 s total recovery
         self._recovery_back_frames = int(0.5 * self.publish_rate)  # first 0.5 s: back up straight
-        self._prev_rotating = False   # tracks rotation→forward transition for grace period
-        self._grace_until = 0.0       # monotonic time: suppress reverse until this time
 
         # Timer loop
         self.timer = self.create_timer(self.dt, self.publish_robot_cmd)
@@ -193,49 +191,25 @@ class DiffDrivePID(Node):
             return np.array([0.0, 0.0])
 
         # ── Immediate wall-hit reversal ────────────────────────────────────────
-        # Arc narrowed to ±30°: inner-corner walls sit at ~±30-45° after a 90° turn
-        # and were triggering reverse with the old ±45° arc.  ±30° (3 rays) only
-        # catches genuine head-on approaches, not exited-corner walls.
-        # Suppressed during pure-rotation (robot can't close on a wall while spinning).
-        # Post-rotation grace (0.4 s): gives the robot time to accelerate away from
-        # the corner before the reverse check re-enables.  Prevents the oscillation
-        # loop where reverse fires the instant the spin completes.
-        goal_angle_pre = np.arctan2(dy, dx)
-        heading_pre = normalize_angle(goal_angle_pre - th_r)
-        currently_rotating = abs(heading_pre) > self.heading_rotate_threshold
-
-        _now_t = time.monotonic()
-        if self._prev_rotating and not currently_rotating:
-            # Just finished a spin — start grace window.
-            self._grace_until = _now_t + 0.4
-        self._prev_rotating = currently_rotating
-        _in_grace = _now_t < self._grace_until
-
-        if not currently_rotating and not _in_grace and self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
+        # If any forward ray (±60°) is closer than 0.22 m the robot is approaching
+        # a wall head-on.  Back up straight until the arc is clear (> 0.50 m).
+        # Reads below 0.28 m are filtered out as they may be chassis reflections.
+        if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
             n_w = len(self._lidar_ranges)
             fwd_min = 30.0
             for i in range(n_w):
                 ray_a = self._lidar_angle_min + i * self._lidar_angle_inc
-                if abs(ray_a) < 0.524:  # ±30°
+                if abs(ray_a) < 1.047:  # ±60° forward arc
                     r = float(self._lidar_ranges[i])
-                    if np.isfinite(r) and r > 0.01:  # include blind-zone reads
+                    if np.isfinite(r) and r > 0.28:  # ignore near blind-zone reads
                         fwd_min = min(fwd_min, r)
-            if fwd_min < 0.30:
+            if fwd_min < 0.22:
                 self._reverse_until_clear = True
             if self._reverse_until_clear:
                 if fwd_min > 0.50:
                     self._reverse_until_clear = False  # enough space — resume
                 else:
-                    goal_angle_rev = np.arctan2(
-                        self.desired_goal[1] - y_r,
-                        self.desired_goal[0] - x_r)
-                    err_rev = normalize_angle(goal_angle_rev - th_r)
-                    az_rev = float(np.clip(
-                        self.k_p * 3.0 * err_rev,
-                        -self.max_angular_vel, self.max_angular_vel))
-                    return np.array([-0.3, az_rev])
-        elif currently_rotating or _in_grace:
-            self._reverse_until_clear = False
+                    return np.array([-0.3, 0.0])  # back up straight
 
         # ── Stuck recovery ──────────────────────────────────────────────────
         if self._recovering:

@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 import heapq
 import math
-import time
 from typing import List, Optional, Tuple
 
 import numpy as np
-from scipy.ndimage import distance_transform_edt
 import rclpy
 import tf2_ros
 from geometry_msgs.msg import PoseStamped
@@ -39,7 +37,6 @@ class AStarPlanner(Node):
 
         self.map_msg: Optional[OccupancyGrid] = None
         self.occ_grid: Optional[np.ndarray] = None
-        self.dist_map: Optional[np.ndarray] = None  # metres to nearest obstacle, per free cell
         self.robot_map_xy: Optional[Tuple[float, float]] = None
         self.all_goals: List[Tuple[float, float]] = []
         self.remaining_goals: List[Tuple[float, float]] = []
@@ -48,7 +45,6 @@ class AStarPlanner(Node):
         self.active_goal: Optional[Tuple[float, float]] = None
         self.pending_waypoints: List[Tuple[float, float]] = []
         self.active_waypoint_idx = -1
-        self._last_replan_time: float = 0.0
 
         self.map_sub = self.create_subscription(OccupancyGrid, '/map', self.map_cb, 10)
         self.odom_sub = self.create_subscription(Odometry, '/odom', self.odom_cb, 20)
@@ -91,10 +87,6 @@ class AStarPlanner(Node):
             return
         grid = np.array(msg.data, dtype=np.int16).reshape((h, w))
         self.occ_grid = self.inflate_obstacles(grid, self.obstacle_inflation_cells)
-        # Distance transform: for every free cell, compute metres to nearest obstacle.
-        # Used by A* to penalise paths that pass close to walls.
-        free_mask = (self.occ_grid < 50)
-        self.dist_map = distance_transform_edt(free_mask) * float(msg.info.resolution)
 
     def true_pose_cb(self, msg: TFMessage):
         """Ground-truth world position. Uses maze_world→vehicle_blue transform."""
@@ -140,24 +132,7 @@ class AStarPlanner(Node):
         # If we currently follow waypoints, check progress and continue publishing.
         if self.pending_waypoints and self.active_waypoint_idx >= 0:
             wp = self.pending_waypoints[self.active_waypoint_idx]
-            dist_to_wp = self.distance(self.robot_map_xy, wp)
-
-            # Off-path detection: robot drifted too far from current waypoint.
-            # This happens after gap-nav maneuvers push the robot off the A* path
-            # and the remaining waypoints end up behind/beside the robot.
-            # Force a fresh replan to the same goal from the current position.
-            _now = time.monotonic()
-            if (dist_to_wp > 0.8
-                    and self.active_goal is not None
-                    and _now - self._last_replan_time > 2.0):
-                self.get_logger().warn(
-                    f'Off-path: {dist_to_wp:.2f} m from waypoint — replanning to {self.active_goal}')
-                self.pending_waypoints = []
-                self.active_waypoint_idx = -1
-                self._last_replan_time = _now
-                return
-
-            if dist_to_wp <= self.goal_reach_tolerance:
+            if self.distance(self.robot_map_xy, wp) <= self.goal_reach_tolerance:
                 if self.active_waypoint_idx < len(self.pending_waypoints) - 1:
                     self.active_waypoint_idx += 1
                     self.publish_goal_pose(self.pending_waypoints[self.active_waypoint_idx])
@@ -196,7 +171,7 @@ class AStarPlanner(Node):
             self.failed_goals.add(next_goal)
             return
 
-        path_rc = self.a_star(start_rc, goal_rc, self.dist_map)
+        path_rc = self.a_star(start_rc, goal_rc)
         if not path_rc:
             self.get_logger().warn(f'No path found to goal {next_goal}; trying others')
             self.failed_goals.add(next_goal)
@@ -271,77 +246,12 @@ class AStarPlanner(Node):
         if sampled[-1] != path_rc[-1]:
             sampled.append(path_rc[-1])
 
-        raw_count = len(sampled)
+        return [self.grid_to_world(r, c) for r, c in sampled]
 
-        # Greedy string-pulling: skip any intermediate waypoint that is visible
-        # in a straight line from the previous kept waypoint (using the inflated
-        # occupancy grid so the robot's width is respected).  Always keep the
-        # final goal cell.
-        pruned = self._string_pull(sampled)
-
-        self.get_logger().info(
-            f'Path pruning: {raw_count} raw waypoints → {len(pruned)} after string-pull')
-
-        return [self.grid_to_world(r, c) for r, c in pruned]
-
-    def _string_pull(self, cells: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
-        """Greedy visibility string-pull over the inflated occupancy grid."""
-        if len(cells) <= 2:
-            return cells
-        result = [cells[0]]
-        i = 0
-        while i < len(cells) - 1:
-            # Scan backward from the end: find the farthest cell reachable in
-            # a straight unobstructed line from the last kept cell.
-            j = len(cells) - 1
-            while j > i + 1:
-                if self._bresenham_clear(result[-1], cells[j]):
-                    break
-                j -= 1
-            result.append(cells[j])
-            i = j
-        return result
-
-    def _bresenham_clear(self, a: Tuple[int, int], b: Tuple[int, int]) -> bool:
-        """Return True if every cell on the Bresenham line a→b is free (< 50)."""
+    def a_star(self, start: Tuple[int, int], goal: Tuple[int, int]) -> List[Tuple[int, int]]:
         assert self.occ_grid is not None
         grid = self.occ_grid
         h, w = grid.shape
-        r0, c0 = a
-        r1, c1 = b
-        dr = abs(r1 - r0)
-        dc = abs(c1 - c0)
-        sr = 1 if r1 > r0 else -1
-        sc = 1 if c1 > c0 else -1
-        err = dr - dc
-        r, c = r0, c0
-        while True:
-            if r < 0 or r >= h or c < 0 or c >= w:
-                return False
-            if grid[r, c] >= 50:
-                return False
-            if r == r1 and c == c1:
-                break
-            e2 = 2 * err
-            if e2 > -dc:
-                err -= dc
-                r += sr
-            if e2 < dr:
-                err += dr
-                c += sc
-        return True
-
-    def a_star(self, start: Tuple[int, int], goal: Tuple[int, int],
-               dist_map: Optional[np.ndarray] = None) -> List[Tuple[int, int]]:
-        assert self.occ_grid is not None
-        grid = self.occ_grid
-        h, w = grid.shape
-        # Exponential wall-proximity penalty: cells near obstacles cost more so A*
-        # routes through corridor centres.  Unlike the old 1/dist cap, the exponential
-        # preserves a gradient even in narrow corridors (where capped values were
-        # identical for edge vs centre cells, letting A* hug walls freely).
-        WALL_WEIGHT = 2.0   # penalty magnitude at the inflated-wall boundary
-        WALL_SIGMA  = 0.25  # falloff distance in metres (≈5 cells at 0.05 m/cell)
 
         if grid[start[0], start[1]] >= 50 or grid[goal[0], goal[1]] >= 50:
             return []
@@ -382,13 +292,7 @@ class AStarPlanner(Node):
                         continue
 
                 nxt = (nr, nc)
-                # Exponential wall-proximity penalty.  At the inflated-wall boundary
-                # (dist=0) penalty = WALL_WEIGHT; decays smoothly toward 0 in open
-                # space.  This creates a consistent gradient toward corridor centres
-                # in passages of any width, unlike the old capped 1/dist formula.
-                wall_penalty = (WALL_WEIGHT * math.exp(-dist_map[nr, nc] / WALL_SIGMA)
-                                if dist_map is not None else 0.0)
-                tentative = g_score[current] + move_cost + wall_penalty
+                tentative = g_score[current] + move_cost
                 if tentative < g_score.get(nxt, float('inf')):
                     came_from[nxt] = current
                     g_score[nxt] = tentative
