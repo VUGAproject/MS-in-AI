@@ -313,101 +313,13 @@ class DiffDrivePID(Node):
                 self._stuck_count = 0          # real progress — reset counter
                 self._struggling_since = None  # made real progress, reset escalation
 
-        # ── Track struggling (slow movement for > 5 s → widen perception) ────
-        speed_proxy = float(np.linalg.norm(cur_pos - (self._stuck_last_xy if self._stuck_last_xy is not None else cur_pos)))
-        if speed_proxy < 0.05:  # essentially stationary right now
-            if self._struggling_since is None:
-                self._struggling_since = time.monotonic()
-        else:
-            self._struggling_since = None
-        struggling = (self._struggling_since is not None and
-                      time.monotonic() - self._struggling_since > 5.0)
-
-        # ── LiDAR gap navigation ───────────────────────────────────────────
+        # ── Pure A* heading tracking ───────────────────────────────────────
+        # Gap nav removed. The robot follows A* waypoints directly.
+        # Emergency reverse (above) handles imminent wall contact.
+        # Stuck recovery (above) handles getting trapped.
         goal_angle = np.arctan2(dy, dx)
-        heading_to_goal = normalize_angle(goal_angle - th_r)  # robot-frame angle to goal
+        heading_to_goal = normalize_angle(goal_angle - th_r)
         steer = heading_to_goal
-
-        if self._lidar_ranges is not None and len(self._lidar_ranges) > 0:
-            n = len(self._lidar_ranges)
-            # Directional self-filter: robot body appears in LiDAR only at
-            # side/rear angles (|ray| >= ±60°). In the forward ±60° sector the
-            # LiDAR protrudes past the robot chassis so no body reflections occur
-            # — use a near-0 threshold there so real close walls stay visible.
-            _ray_angles = (self._lidar_angle_min +
-                           np.arange(len(self._lidar_ranges)) * self._lidar_angle_inc)
-            _sf_thresh = np.where(np.abs(_ray_angles) < 1.047, 0.01, 0.28)
-            rng = np.where(
-                np.isfinite(self._lidar_ranges) & (self._lidar_ranges > _sf_thresh),
-                self._lidar_ranges,
-                30.0
-            )
-
-            # Gap nav threshold bands:
-            #   < 0.25 m normal / < 0.28 m struggling → gap nav steers
-            #   < 0.30 m → emergency reverse takes over
-            # MIN_CLEAR is intentionally below the 0.30 m reverse trigger so gap
-            # nav acts as a soft pre-warning, not a constant corridor distraction.
-            # A 0.6 m corridor puts walls ~0.30 m from robot center; the old
-            # 0.38 m threshold meant gap nav fired even in a clear straight run.
-            MIN_CLEAR = 0.28 if struggling else 0.25
-            blocked_cone = 1.047 if struggling else 0.524  # ±60° escalated, ±30° normal
-            open_mask = rng > MIN_CLEAR
-
-            # "Goal in sight" bypass: if the LiDAR ray nearest to the goal direction
-            # reads > 0.6 m, the direct lane is clear — skip gap nav entirely and
-            # drive straight to the waypoint.  This avoids side-wall triggers in
-            # corridors and approach phases where nothing actually blocks the goal.
-            best_ray_idx = min(range(n), key=lambda i: abs(normalize_angle(
-                (self._lidar_angle_min + i * self._lidar_angle_inc) - heading_to_goal)))
-            goal_ray_clear = rng[best_ray_idx] > 0.60
-
-            # Check whether the direct path to goal is blocked
-            direct_blocked = (not goal_ray_clear) and any(
-                rng[i] < MIN_CLEAR
-                for i in range(n)
-                if abs(normalize_angle(
-                    (self._lidar_angle_min + i * self._lidar_angle_inc) - heading_to_goal
-                )) < blocked_cone
-            )
-
-            if direct_blocked:
-                # Find contiguous open-ray segments in the forward ±150° sector
-                segments = []
-                j = 0
-                while j < n:
-                    ray_a = self._lidar_angle_min + j * self._lidar_angle_inc
-                    if open_mask[j] and abs(ray_a) <= 2.618:
-                        start = j
-                        while j < n and open_mask[j] and abs(
-                                self._lidar_angle_min + j * self._lidar_angle_inc) <= 2.618:
-                            j += 1
-                        segments.append((start, j - 1))
-                    else:
-                        j += 1
-
-                if segments:
-                    # Pick the best segment: use sqrt(width) to limit dominance of
-                    # wide-open areas, and a strong angular penalty (2.0) so the gap
-                    # most aligned with the goal direction wins over a wider side gap.
-                    # Require at least 3 rays (~30°) so a single-ray slit isn't chosen.
-                    best_score = -1.0
-                    best_center = heading_to_goal
-                    for start, end in segments:
-                        gap_width = end - start + 1
-                        if gap_width < 3:  # skip navigably-too-narrow gaps
-                            continue
-                        mid_i = (start + end) / 2.0
-                        center_angle = self._lidar_angle_min + mid_i * self._lidar_angle_inc
-                        angular_dist = abs(normalize_angle(center_angle - heading_to_goal))
-                        score = math.sqrt(float(gap_width)) * math.exp(-2.0 * angular_dist)
-                        if score > best_score:
-                            best_score = score
-                            best_center = center_angle
-                    # Blend 40/60: weight goal direction more heavily so the robot
-                    # stays oriented toward the target when the path is mostly clear.
-                    blended = 0.40 * best_center + 0.60 * heading_to_goal
-                    steer = normalize_angle(blended)
 
         # ── Heading and velocity control ────────────────────────────────────
         heading_err = float(normalize_angle(steer))
