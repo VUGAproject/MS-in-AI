@@ -28,9 +28,14 @@ class AStarPlanner(Node):
         self.declare_parameter('goal_reach_tolerance', 0.35)
         self.declare_parameter('waypoint_stride_cells', 5)
         self.declare_parameter('obstacle_inflation_cells', 3)
+        self.declare_parameter('force_goal_order', '')
         self.goal_reach_tolerance = float(self.get_parameter('goal_reach_tolerance').value)
         self.waypoint_stride_cells = int(self.get_parameter('waypoint_stride_cells').value)
         self.obstacle_inflation_cells = int(self.get_parameter('obstacle_inflation_cells').value)
+        raw_order = self.get_parameter('force_goal_order').value.strip()
+        self.force_goal_order: List[int] = [
+            int(x) for x in raw_order.split(',') if x.strip()
+        ] if raw_order else []
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -221,6 +226,12 @@ class AStarPlanner(Node):
         candidates = [g for g in self.remaining_goals if g not in self.failed_goals]
         if not candidates:
             return None
+        if self.force_goal_order:
+            for idx in self.force_goal_order:
+                if 0 <= idx < len(self.all_goals):
+                    g = self.all_goals[idx]
+                    if g in candidates:
+                        return g
         return min(candidates, key=lambda g: self.distance(self.robot_map_xy, g))
 
     def world_to_grid(self, x: float, y: float) -> Optional[Tuple[int, int]]:
