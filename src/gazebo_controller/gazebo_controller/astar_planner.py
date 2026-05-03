@@ -114,7 +114,8 @@ class AStarPlanner(Node):
         if not goals:
             return
 
-        if sorted(goals) != sorted(self.all_goals):
+        if not self.all_goals:
+            # First reception: initialise everything.
             self.all_goals = goals
             self.remaining_goals = goals.copy()
             self.failed_goals.clear()
@@ -122,6 +123,14 @@ class AStarPlanner(Node):
             self.pending_waypoints = []
             self.active_waypoint_idx = -1
             self.get_logger().info(f'Received {len(goals)} goal points')
+        else:
+            # Subsequent publications: only add genuinely new goals so that
+            # already-reached goals are never resurrected.
+            new_goals = [g for g in goals if g not in self.all_goals]
+            if new_goals:
+                self.all_goals.extend(new_goals)
+                self.remaining_goals.extend(new_goals)
+                self.get_logger().info(f'Added {len(new_goals)} new goal points')
 
     def tick(self):
         if self.map_msg is None or self.occ_grid is None or self.robot_map_xy is None:
