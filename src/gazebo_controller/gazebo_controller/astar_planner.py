@@ -137,9 +137,6 @@ class AStarPlanner(Node):
         if not self.remaining_goals and self.active_goal is None:
             return
 
-        if not self.remaining_goals and self.active_goal is None:
-            return
-
         # If we currently follow waypoints, check progress and continue publishing.
         if self.pending_waypoints and self.active_waypoint_idx >= 0:
             wp = self.pending_waypoints[self.active_waypoint_idx]

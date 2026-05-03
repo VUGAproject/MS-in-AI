@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-import math
 import time
 import numpy as np
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile
-from rclpy.duration import Duration
 
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, Path
@@ -97,6 +95,7 @@ class DiffDrivePID(Node):
         self.Xp_last = None
         self.has_goal = False
         self.has_odom = False
+        self._has_ground_truth = False  # True once Gazebo TF has been received
 
         self.trail_path = Path()
         self.trail_path.header.frame_id = 'map'
@@ -143,58 +142,29 @@ class DiffDrivePID(Node):
                 _, _, yaw = euler_from_quaternion(tf.transform.rotation)
                 self.robot_state = np.array([float(t.x), float(t.y), yaw])
                 self.has_odom = True
+                self._has_ground_truth = True
                 return
 
     def odom_received(self, msg):
-        self.has_odom = True  # fallback signal only; true_pose_cb provides position
+        # Fallback: use odometry to seed robot_state until the Gazebo ground-truth
+        # TF arrives.  Once true_pose_cb has fired at least once we stop updating
+        # from odometry so ground-truth remains the sole position source.
+        if not self._has_ground_truth:
+            x = float(msg.pose.pose.position.x)
+            y = float(msg.pose.pose.position.y)
+            _, _, yaw = euler_from_quaternion(msg.pose.pose.orientation)
+            self.robot_state = np.array([x, y, yaw])
+        self.has_odom = True
 
     def goal_received(self, msg):
-        """Callback for goal pose messages"""
-        # Check if goal is in the correct frame (odom)
-        goal_frame = msg.header.frame_id
+        """Callback for goal pose messages."""
+        # The planner always publishes in 'map' frame, which is statically
+        # aligned to 'odom' and 'maze_world'.  Accept the x,y directly.
+        self.desired_goal = np.array([msg.pose.position.x, msg.pose.position.y])
+        self.get_logger().info(
+            f'Goal set to: [{self.desired_goal[0]:.3f}, {self.desired_goal[1]:.3f}]'
+            f' (frame: {msg.header.frame_id})')
 
-        # In this project launch, map and odom are intentionally aligned.
-        if goal_frame == 'map':
-            self.desired_goal = np.array([msg.pose.position.x, msg.pose.position.y])
-            self.get_logger().info(f'Goal set to: [{self.desired_goal[0]:.3f}, {self.desired_goal[1]:.3f}] using map=odom alignment')
-        elif goal_frame != 'odom' and goal_frame != '':
-            self.get_logger().warn(f'Goal received in frame "{goal_frame}" but expecting "odom". Attempting to transform...')
-            try:
-                # Try to transform the goal to odom frame
-                when = rclpy.time.Time()
-                trans = self._tf_buffer.lookup_transform(
-                    'odom', goal_frame,
-                    when, timeout=Duration(seconds=1.0))
-                
-                # Get the goal position in the source frame
-                goal_x = msg.pose.position.x
-                goal_y = msg.pose.position.y
-                
-                # Get translation
-                tx = trans.transform.translation.x
-                ty = trans.transform.translation.y
-                
-                # Get rotation (convert quaternion to yaw)
-                quat = trans.transform.rotation
-                _, _, yaw = euler_from_quaternion(quat)
-                
-                # Apply full transformation: rotate then translate
-                cos_yaw = np.cos(yaw)
-                sin_yaw = np.sin(yaw)
-                
-                goal_x_odom = cos_yaw * goal_x - sin_yaw * goal_y + tx
-                goal_y_odom = sin_yaw * goal_x + cos_yaw * goal_y + ty
-                
-                self.desired_goal = np.array([goal_x_odom, goal_y_odom])
-                self.get_logger().info(f'Goal transformed to odom frame: [{self.desired_goal[0]:.3f}, {self.desired_goal[1]:.3f}]')
-            except Exception as e:
-                self.get_logger().error(f'Failed to transform goal: {str(e)}')
-                return
-        else:
-            # Goal is already in odom frame (or no frame specified, assume odom)
-            self.desired_goal = np.array([msg.pose.position.x, msg.pose.position.y])
-            self.get_logger().info(f'Goal set to: [{self.desired_goal[0]:.3f}, {self.desired_goal[1]:.3f}] in odom frame')
-        
         # Reset the integral term when a new goal is set
         self.Xp_last = None
         self.has_goal = True
