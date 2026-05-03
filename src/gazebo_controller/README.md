@@ -182,7 +182,34 @@ The robot starts at the bottom of the maze and works upward through three stacke
 *(screenshot: RViz basic_maze)*
 
 ---
-> **Note:** Screenshots for Maze_ql_1, Maze_ng, and Maze_hr to be added.
+
+### Maze_ql_1
+
+**Layout:** 9.24 × 8.43 m arena. The maze has a closed rectangular boundary with a mix of axis-aligned and diagonal interior walls. Three walls are significantly diagonal:
+- A long diagonal wall (~3.2 m) cutting across the upper-center area at ~116°
+- A long diagonal wall (~3.8 m) running across the upper-right at ~−54°
+- A shorter diagonal wall (~1.5 m) in the lower-center at ~−46°
+
+Additional axis-aligned walls include a vertical wall at x = 2.90 m (right side), a long vertical wall at x = −2.89 m (left-center), and a longer outer-left vertical wall at x = −4.44 m, creating a narrow corridor on the far left. A short horizontal wall sits at y = −1.55 m near the center.
+
+**Spawn:** (−0.33, −2.15), facing yaw = 0.5 rad (~29°), lower-right section of the maze.
+
+**Goals (nearest-first from spawn):**
+1. goal_2 at (−3.62, −0.7) — far left, behind the long vertical wall at x = −2.89 m
+2. goal_3 at (−2.05, 2.35) — upper left, above the diagonal walls
+3. goal_1 at (0.2, 3.0) — upper center, above the diagonal crossing
+
+**Navigation path:**
+The robot starts lower-right and immediately faces its most complex challenge: goal_2 is on the far left side of a long vertical wall. A* routes the robot south first to clear the bottom of that wall, then west through the left corridor to reach goal_2. From there the robot heads north and must navigate through or around the two large diagonal walls in the upper half to reach goal_3, then turns slightly right to close in on goal_1 near the top center. The diagonal walls are the defining challenge of this maze — the planned path must route around their ends rather than through them, as confirmed by the curved trail visible in RViz.
+
+*Gazebo Sim — Maze_ql_1 with robot in lower-right section and goals visible as green dots:*
+*(screenshot: Gazebo Maze_ql_1)*
+
+*RViz — occupancy grid showing diagonal walls and pink robot trail navigating upper portion of maze; red dotted circle is live LiDAR scan:*
+*(screenshot: RViz Maze_ql_1)*
+
+---
+> **Note:** Screenshots for Maze_ng and Maze_hr to be added.
 
 ## Overview
 
